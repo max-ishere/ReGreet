@@ -50,7 +50,6 @@ pub const POWEROFF_CMD: &str = env_or!("POWEROFF_CMD", "poweroff");
 pub const GREETING_MSG: &str = "Welcome back!";
 
 /// Directories separated by `:`, containing desktop files for X11/Wayland sessions
-pub const SESSION_DIRS: &str = env_or!(
-    "SESSION_DIRS",
-    "/usr/share/xsessions:/usr/share/wayland-sessions"
-);
+pub const XSESSION_DIRS: &str = env_or!("XSESSION_DIRS", "/usr/share/xsessions");
+pub const WAYLAND_SESSION_DIRS: &str =
+    env_or!("WAYLAND_SESSION_DIRS", "/usr/share/wayland-sessions");
