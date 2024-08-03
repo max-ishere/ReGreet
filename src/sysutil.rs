@@ -18,6 +18,7 @@ use regex::Regex;
 use shlex::Shlex;
 use tracing::{debug, info, warn};
 
+use crate::config::Config;
 use crate::constants::{WAYLAND_SESSION_DIRS, XSESSION_DIRS};
 
 /// Path to the file that contains min/max UID of a regular user
@@ -45,13 +46,10 @@ pub struct SysUtil {
 }
 
 impl SysUtil {
-    pub fn new() -> IOResult<Self> {
+    pub fn new(config: &Config) -> IOResult<Self> {
         let (users, shells) = Self::init_users()?;
-        let mut sessions = Self::init_sessions(
-            XSESSION_DIRS,
-            "xsessions",
-            vec!["startx".into(), "/bin/env".into()],
-        )?;
+        let x11_cmd_prefix = config.get_sys_commands().x11_prefix.clone();
+        let mut sessions = Self::init_sessions(XSESSION_DIRS, "xsessions", x11_cmd_prefix)?;
         sessions.extend(Self::init_sessions(
             WAYLAND_SESSION_DIRS,
             "wayland-sessions",

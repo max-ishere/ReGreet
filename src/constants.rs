@@ -53,3 +53,6 @@ pub const GREETING_MSG: &str = "Welcome back!";
 pub const XSESSION_DIRS: &str = env_or!("XSESSION_DIRS", "/usr/share/xsessions");
 pub const WAYLAND_SESSION_DIRS: &str =
     env_or!("WAYLAND_SESSION_DIRS", "/usr/share/wayland-sessions");
+
+/// Command prefix for X11 sessions to start the X server
+pub const X11_CMD_PREFIX: &str = env_or!("X11_CMD_PREFIX", "startx /usr/bin/env");
