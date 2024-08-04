@@ -30,10 +30,23 @@ const DEFAULT_UID_MAX: u32 = 60000;
 /// XDG data directory variable name (parent directory for X11/Wayland sessions)
 const XDG_DIR_ENV_VAR: &str = "XDG_DATA_DIRS";
 
+#[derive(Clone, Copy)]
+pub enum SessionType {
+    X11,
+    Wayland,
+    Unknown,
+}
+
+#[derive(Clone)]
+pub struct SessionInfo {
+    pub command: Vec<String>,
+    pub sess_type: SessionType,
+}
+
 // Convenient aliases for used maps
 type UserMap = HashMap<String, String>;
 type ShellMap = HashMap<String, Vec<String>>;
-type SessionMap = HashMap<String, Vec<String>>;
+type SessionMap = HashMap<String, SessionInfo>;
 
 /// Stores info of all regular users and sessions
 pub struct SysUtil {
@@ -49,11 +62,13 @@ impl SysUtil {
     pub fn new(config: &Config) -> IOResult<Self> {
         let (users, shells) = Self::init_users()?;
         let x11_cmd_prefix = config.get_sys_commands().x11_prefix.clone();
-        let mut sessions = Self::init_sessions(XSESSION_DIRS, "xsessions", x11_cmd_prefix)?;
+        let mut sessions =
+            Self::init_sessions(XSESSION_DIRS, "xsessions", x11_cmd_prefix, SessionType::X11)?;
         sessions.extend(Self::init_sessions(
             WAYLAND_SESSION_DIRS,
             "wayland-sessions",
             Vec::new(),
+            SessionType::Wayland,
         )?);
         Ok(Self {
             users,
@@ -167,6 +182,7 @@ impl SysUtil {
         default_sess_dirs: &str,
         xdg_sess_dir: &str,
         cmd_prefix: Vec<String>,
+        sess_type: SessionType,
     ) -> IOResult<SessionMap> {
         let mut found_session_names = HashSet::new();
         let mut sessions = HashMap::new();
@@ -320,7 +336,13 @@ impl SysUtil {
                     continue;
                 };
                 found_session_names.insert(fname_and_type);
-                sessions.insert(name.to_string(), cmd);
+                sessions.insert(
+                    name.to_string(),
+                    SessionInfo {
+                        command: cmd,
+                        sess_type,
+                    },
+                );
             }
         }
 
