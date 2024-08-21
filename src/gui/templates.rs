@@ -44,6 +44,7 @@ impl WidgetTemplate for Ui {
                 set_valign: gtk::Align::Center,
                 inline_css: "background-color: @theme_bg_color",
 
+                #[name = "grid"]
                 gtk::Grid {
                     set_column_spacing: 15,
                     set_margin_bottom: 15,
@@ -91,14 +92,6 @@ impl WidgetTemplate for Ui {
                     #[name = "username_entry"]
                     attach[1, 1, 1, 1] = &gtk::Entry { set_hexpand: true },
 
-                    /// Widget containing the sessions
-                    #[name = "sessions_box"]
-                    attach[1, 2, 1, 1] = &gtk::ComboBoxText,
-
-                    /// Widget where the user enters the session
-                    #[name = "session_entry"]
-                    attach[1, 2, 1, 1] = &gtk::Entry,
-
                     /// Label for the password widget
                     #[name = "input_label"]
                     #[template]
@@ -121,14 +114,6 @@ impl WidgetTemplate for Ui {
                         set_tooltip_text: Some("Manually enter username"),
                     },
 
-                    /// Button to toggle manual session entry
-                    #[name = "sess_toggle"]
-                    attach[2, 2, 1, 1] = &gtk::ToggleButton {
-                        set_icon_name: "document-edit-symbolic",
-                        set_tooltip_text: Some("Manually enter session command"),
-                    },
-
-                    /// Collection of action buttons (eg. Login)
                     attach[1, 3, 2, 1] = &gtk::Box {
                         set_halign: gtk::Align::End,
                         set_spacing: 15,

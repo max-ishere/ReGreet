@@ -8,32 +8,23 @@ use derivative::Derivative;
 use greetd_ipc::Response;
 use relm4::gtk::{glib::GString, prelude::*, ComboBoxText, Entry};
 
+use super::model::SessionSelection;
+
 #[derive(Debug)]
 /// Info about the current user and chosen session
-pub struct UserSessInfo {
+pub struct UserInfo {
     /// The ID for the currently chosen user
     pub(super) user_id: Option<GString>,
     /// The entry text for the currently chosen user
     pub(super) user_text: GString,
-    /// The ID for the currently chosen session
-    pub(super) sess_id: Option<GString>,
-    /// The entry text for the currently chosen session
-    pub(super) sess_text: GString,
 }
 
-impl UserSessInfo {
+impl UserInfo {
     /// Extract session and user info from the relevant widgets.
-    pub(super) fn extract(
-        usernames_box: &ComboBoxText,
-        username_entry: &Entry,
-        sessions_box: &ComboBoxText,
-        session_entry: &Entry,
-    ) -> Self {
+    pub(super) fn extract(usernames_box: &ComboBoxText, username_entry: &Entry) -> Self {
         Self {
             user_id: usernames_box.active_id(),
             user_text: username_entry.text(),
-            sess_id: sessions_box.active_id(),
-            sess_text: session_entry.text(),
         }
     }
 }
@@ -46,16 +37,15 @@ pub enum InputMsg {
     Login {
         #[derivative(Debug = "ignore")]
         input: String,
-        info: UserSessInfo,
+        info: UserInfo,
     },
     /// Cancel the login request
     Cancel,
     /// The current user was changed in the GUI.
-    UserChanged(UserSessInfo),
+    UserChanged(UserInfo),
+    SessionSelected(SessionSelection),
     /// Toggle manual entry of user.
     ToggleManualUser,
-    /// Toggle manual entry of session.
-    ToggleManualSess,
     Reboot,
     PowerOff,
 }
