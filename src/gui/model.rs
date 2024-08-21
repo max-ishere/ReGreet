@@ -14,13 +14,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use greetd_ipc::{AuthMessageType, ErrorType, Response};
-use relm4::{
-    gtk::{
-        gdk::{Display, Monitor},
-        prelude::*,
-    },
-    AsyncComponentSender,
+use gtk4::{
+    gdk::{Display, Monitor},
+    prelude::*,
 };
+use relm4::{prelude::*, AsyncComponentSender};
 use tokio::{sync::Mutex, time::sleep};
 use tracing::{debug, error, info, instrument, warn};
 
@@ -29,7 +27,10 @@ use crate::client::{AuthStatus, GreetdClient};
 use crate::config::Config;
 use crate::sysutil::SysUtil;
 
-use super::messages::{CommandMsg, UserSessInfo};
+use super::{
+    component::{EntryOrDropDown, Selector, SelectorInit, SelectorOption, SelectorOutput},
+    messages::{CommandMsg, InputMsg, UserInfo},
+};
 
 const ERROR_MSG_CLEAR_DELAY: u64 = 5;
 
@@ -51,8 +52,6 @@ pub(super) struct Updates {
     pub(super) input: String,
     /// Whether the username is being entered manually
     pub(super) manual_user_mode: bool,
-    /// Whether the session is being entered manually
-    pub(super) manual_sess_mode: bool,
     /// Input prompt sent by greetd for text input
     pub(super) input_prompt: String,
     /// Whether the user is currently entering a secret, something visible or nothing
@@ -87,15 +86,72 @@ pub struct Greeter {
     /// The config for this greeter
     pub(super) config: Config,
     /// Session info set after pressing login
-    pub(super) sess_info: Option<UserSessInfo>,
+    pub(super) sess_info: Option<UserInfo>,
     /// The updates from the model that are read by the view
     pub(super) updates: Updates,
     /// Is it run as demo
     pub(super) demo: bool,
+
+    #[doc(hidden)]
+    pub(super) session_selector: Controller<Selector>,
+
+    /// What the session input component reports as the current user selection
+    pub(super) selected_session: SessionSelection,
+}
+
+#[derive(Debug, Clone)]
+pub enum SessionSelection {
+    ID(String),
+    Cmd(String),
+}
+
+impl From<EntryOrDropDown> for SessionSelection {
+    fn from(value: EntryOrDropDown) -> Self {
+        match value {
+            EntryOrDropDown::Entry(entry) => Self::Cmd(entry),
+            EntryOrDropDown::DropDown(id) => Self::ID(id),
+        }
+    }
 }
 
 impl Greeter {
-    pub(super) async fn new(config_path: &Path, demo: bool) -> Self {
+    pub(super) async fn new(
+        config_path: &Path,
+        demo: bool,
+        sender: &AsyncComponentSender<Self>,
+    ) -> Self {
+        let sys_util = SysUtil::new().expect("Couldn't read available users and sessions");
+
+        let sessions: Vec<_> = sys_util
+            .get_sessions()
+            .keys()
+            .map(|name| SelectorOption {
+                id: name.clone(),
+                text: name.clone(),
+            })
+            .collect();
+
+        let initial_selection = EntryOrDropDown::DropDown(sessions[0].id.clone());
+
+        let session_selector = Selector::builder()
+            .launch(SelectorInit {
+                entry_placeholder: "Session command".to_string(),
+                options: sessions.clone(),
+                initial_selection: initial_selection.clone(),
+                toggle_icon_name: "document-edit-symbolic".to_string(),
+                toggle_tooltip: "Manually enter session command".to_string(),
+            })
+            .forward(sender.input_sender(), move |output| {
+                InputMsg::SessionSelected(match output {
+                    SelectorOutput::CurrentSelection(EntryOrDropDown::DropDown(id)) => {
+                        SessionSelection::ID(id)
+                    }
+                    SelectorOutput::CurrentSelection(EntryOrDropDown::Entry(other)) => {
+                        SessionSelection::Cmd(other)
+                    }
+                })
+            });
+
         let config = Config::new(config_path);
 
         let updates = Updates {
@@ -103,7 +159,6 @@ impl Greeter {
             error: None,
             input: String::new(),
             manual_user_mode: false,
-            manual_sess_mode: false,
             input_mode: InputMode::None,
             input_prompt: String::new(),
             active_session_id: None,
@@ -118,12 +173,15 @@ impl Greeter {
         ));
         Self {
             greetd_client,
-            sys_util: SysUtil::new().expect("Couldn't read available users and sessions"),
+            sys_util,
             cache: Cache::new(),
             sess_info: None,
             config,
             updates,
             demo,
+
+            session_selector,
+            selected_session: initial_selection.into(),
         }
     }
 
@@ -227,23 +285,20 @@ impl Greeter {
 
     /// Create a greetd session, i.e. start a login attempt for the current user.
     async fn create_session(&mut self, sender: &AsyncComponentSender<Self>) {
-        let username = if let Some(username) = self.get_current_username() {
-            username
-        } else {
+        let Some(username) = self.get_current_username() else {
             // No username found (which shouldn't happen), so we can't create the session.
             return;
         };
 
         // Before trying to create a session, check if the session command (if manually entered) is
         // valid.
-        if self.updates.manual_sess_mode {
-            let info = self.sess_info.as_ref().expect("No session info set yet");
-            if shlex::split(info.sess_text.as_str()).is_none() {
+        if let SessionSelection::Cmd(ref cmd) = self.selected_session {
+            if shlex::split(cmd).is_none() {
                 // This must be an invalid command.
                 self.display_error(
                     sender,
                     "Invalid session command",
-                    &format!("Invalid session command: {}", info.sess_text),
+                    &format!("Invalid session command: {cmd}"),
                 );
                 return;
             };
@@ -457,53 +512,34 @@ impl Greeter {
     }
 
     /// Get the currently selected session name (if available) and command.
+    ///
+    /// Returns: `session_id, session_shell_command`
     fn get_current_session_cmd(
         &mut self,
         sender: &AsyncComponentSender<Self>,
     ) -> (Option<String>, Option<Vec<String>>) {
-        let info = self.sess_info.as_ref().expect("No session info set yet");
-        if self.updates.manual_sess_mode {
-            debug!(
-                "Retrieved session command '{}' through manual entry",
-                info.sess_text
-            );
-            if let Some(cmd) = shlex::split(info.sess_text.as_str()) {
-                (None, Some(cmd))
-            } else {
-                // This must be an invalid command.
-                self.display_error(
-                    sender,
-                    "Invalid session command",
-                    &format!("Invalid session command: {}", info.sess_text),
-                );
-                (None, None)
-            }
-        } else if let Some(session) = &info.sess_id {
-            // Get the currently selected session.
-            debug!("Retrieved current session: {session}");
-            if let Some(cmd) = self.sys_util.get_sessions().get(session.as_str()) {
-                (Some(session.to_string()), Some(cmd.clone()))
-            } else {
-                // Shouldn't happen, unless there are no sessions available.
-                let error_msg = format!("Session '{session}' not found");
-                self.display_error(sender, &error_msg, &error_msg);
-                (None, None)
-            }
-        } else {
-            let username = if let Some(username) = self.get_current_username() {
-                username
-            } else {
-                // This shouldn't happen, because a session should've been created with a username.
-                unimplemented!("Trying to create session without a username");
-            };
-            warn!("No entry found; using default login shell of user: {username}",);
-            if let Some(cmd) = self.sys_util.get_shells().get(username.as_str()) {
+        match &self.selected_session {
+            SessionSelection::Cmd(cmd) => {
+                debug!("Retrieved session command '{cmd}' through manual entry");
+
+                let Some(cmd) = shlex::split(cmd) else {
+                    // TODO: Move to caller.
+                    self.display_error(
+                        sender,
+                        "Invalid session command",
+                        &format!("Invalid session command: {cmd}"),
+                    );
+                    return (None, None);
+                };
+
                 (None, Some(cmd.clone()))
-            } else {
-                // No login shell exists.
-                let error_msg = "No session or login shell found";
-                self.display_error(sender, error_msg, error_msg);
-                (None, None)
+            }
+            SessionSelection::ID(session) => {
+                debug!("Retrieved current session: {session}");
+
+                let cmd = self.sys_util.get_sessions()[session.as_str()].clone();
+
+                (Some(session.to_string()), Some(cmd.clone()))
             }
         }
     }
@@ -511,9 +547,7 @@ impl Greeter {
     /// Start the session for the selected user.
     async fn start_session(&mut self, sender: &AsyncComponentSender<Self>) {
         // Get the session command.
-        let (session, cmd) = if let (session, Some(cmd)) = self.get_current_session_cmd(sender) {
-            (session, cmd)
-        } else {
+        let (session, Some(cmd)) = self.get_current_session_cmd(sender) else {
             // Error handling should be inside `get_current_session_cmd`, so simply return.
             return;
         };

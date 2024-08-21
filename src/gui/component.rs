@@ -10,19 +10,22 @@ use std::time::Duration;
 use chrono::Local;
 use tracing::{debug, info, warn};
 
-use gtk::prelude::*;
+use gtk4::prelude::*;
 use relm4::{
     component::{AsyncComponent, AsyncComponentParts, AsyncComponentSender},
-    gtk,
+    prelude::*,
 };
 use tokio::time::sleep;
 
 #[cfg(feature = "gtk4_8")]
 use crate::config::BgFit;
 
-use super::messages::{CommandMsg, InputMsg, UserSessInfo};
+use super::messages::{CommandMsg, InputMsg, UserInfo};
 use super::model::{Greeter, InputMode, Updates};
 use super::templates::Ui;
+
+mod selector;
+pub use selector::*;
 
 const DATETIME_FMT: &str = "%a %R";
 const DATETIME_UPDATE_DELAY: u64 = 500;
@@ -75,12 +78,6 @@ fn setup_users_sessions(model: &Greeter, widgets: &GreeterWidgets) {
             initial_username = Some(username.clone());
         }
         widgets.ui.usernames_box.append(Some(username), user);
-    }
-
-    // Populate the sessions combo box.
-    for session in model.sys_util.get_sessions().keys() {
-        debug!("Found session: {session}");
-        widgets.ui.sessions_box.append(Some(session), session);
     }
 
     // If the last user is known, show their login initially.
@@ -145,6 +142,17 @@ impl AsyncComponent for Greeter {
             #[name = "ui"]
             #[template]
             Ui {
+                #[template_child] grid {
+                    // TODO: Split the grid into 2 separate templates and conditionally reveal one or the other on the .is_input()
+                    attach[1, 2, 2, 1] = if !model.updates.is_input() {
+                        model.session_selector.widget().clone() {
+                        }
+                    } else {
+                        // TODO: THIS BOX PREVENTS TOUCH EVENTS FROM GOING TO THE PASSWORD FIELD, REMOVE IT
+                        gtk::Box {}
+                    }
+                },
+
                 #[template_child]
                 background { set_filename: model.config.get_background().clone() },
                 #[template_child]
@@ -172,11 +180,9 @@ impl AsyncComponent for Greeter {
                     set_sensitive: !model.updates.manual_user_mode && !model.updates.is_input(),
                     #[track(model.updates.changed(Updates::manual_user_mode()))]
                     set_visible: !model.updates.manual_user_mode,
-                    connect_changed[
-                        sender, username_entry, sessions_box, session_entry
-                    ] => move |this| sender.input(
+                    connect_changed[sender, username_entry] => move |this| sender.input(
                         Self::Input::UserChanged(
-                            UserSessInfo::extract(this, &username_entry, &sessions_box, &session_entry)
+                            UserInfo::extract(this, &username_entry)
                         )
                     ),
                 },
@@ -189,24 +195,6 @@ impl AsyncComponent for Greeter {
                     set_sensitive: model.updates.manual_user_mode && !model.updates.is_input(),
                     #[track(model.updates.changed(Updates::manual_user_mode()))]
                     set_visible: model.updates.manual_user_mode,
-                },
-                #[template_child]
-                sessions_box {
-                    #[track(
-                        model.updates.changed(Updates::manual_sess_mode())
-                        || model.updates.changed(Updates::input_mode())
-                    )]
-                    set_visible: !model.updates.manual_sess_mode && !model.updates.is_input(),
-                    #[track(model.updates.changed(Updates::active_session_id()))]
-                    set_active_id: model.updates.active_session_id.as_deref(),
-                },
-                #[template_child]
-                session_entry {
-                    #[track(
-                        model.updates.changed(Updates::manual_sess_mode())
-                        || model.updates.changed(Updates::input_mode())
-                    )]
-                    set_visible: model.updates.manual_sess_mode && !model.updates.is_input(),
                 },
                 #[template_child]
                 input_label {
@@ -226,14 +214,10 @@ impl AsyncComponent for Greeter {
                     grab_focus: (),
                     #[track(model.updates.changed(Updates::input()))]
                     set_text: &model.updates.input,
-                    connect_activate[
-                        sender, usernames_box, username_entry, sessions_box, session_entry
-                    ] => move |this| {
+                    connect_activate[sender, usernames_box, username_entry] => move |this| {
                         sender.input(Self::Input::Login {
                             input: this.text().to_string(),
-                            info: UserSessInfo::extract(
-                                &usernames_box, &username_entry, &sessions_box, &session_entry
-                            ),
+                            info: UserInfo::extract( &usernames_box, &username_entry),
                         })
                     }
                 },
@@ -248,14 +232,10 @@ impl AsyncComponent for Greeter {
                     grab_focus: (),
                     #[track(model.updates.changed(Updates::input()))]
                     set_text: &model.updates.input,
-                    connect_activate[
-                        sender, usernames_box, username_entry, sessions_box, session_entry
-                    ] => move |this| {
+                    connect_activate[sender, usernames_box, username_entry] => move |this| {
                         sender.input(Self::Input::Login {
                             input: this.text().to_string(),
-                            info: UserSessInfo::extract(
-                                &usernames_box, &username_entry, &sessions_box, &session_entry
-                            ),
+                            info: UserInfo::extract(&usernames_box, &username_entry),
                         })
                     }
                 },
@@ -264,12 +244,6 @@ impl AsyncComponent for Greeter {
                     #[track(model.updates.changed(Updates::input_mode()))]
                     set_sensitive: !model.updates.is_input(),
                     connect_clicked => Self::Input::ToggleManualUser,
-                },
-                #[template_child]
-                sess_toggle {
-                    #[track(model.updates.changed(Updates::input_mode()))]
-                    set_visible: !model.updates.is_input(),
-                    connect_clicked => Self::Input::ToggleManualSess,
                 },
                 #[template_child]
                 cancel_button {
@@ -290,8 +264,6 @@ impl AsyncComponent for Greeter {
                         visible_entry,
                         usernames_box,
                         username_entry,
-                        sessions_box,
-                        session_entry,
                     ] => move |_| {
                         sender.input(Self::Input::Login {
                             input: if secret_entry.is_visible() {
@@ -304,9 +276,7 @@ impl AsyncComponent for Greeter {
                                 // This should correspond to `InputMode::None`.
                                 String::new()
                             },
-                            info: UserSessInfo::extract(
-                                &usernames_box, &username_entry, &sessions_box, &session_entry
-                            ),
+                            info: UserInfo::extract(&usernames_box, &username_entry),
                         })
                     }
                 },
@@ -344,7 +314,8 @@ impl AsyncComponent for Greeter {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let mut model = Self::new(&input.config_path, input.demo).await;
+        let mut model = Self::new(&input.config_path, input.demo, &sender).await;
+
         let widgets = view_output!();
 
         // Make the info bar permanently visible, since it was made invisible during init. The
@@ -425,9 +396,9 @@ impl AsyncComponent for Greeter {
             Self::Input::ToggleManualUser => self
                 .updates
                 .set_manual_user_mode(!self.updates.manual_user_mode),
-            Self::Input::ToggleManualSess => self
-                .updates
-                .set_manual_sess_mode(!self.updates.manual_sess_mode),
+            Self::Input::SessionSelected(str) => {
+                self.selected_session = str;
+            }
             Self::Input::Reboot => self.reboot_click_handler(&sender),
             Self::Input::PowerOff => self.poweroff_click_handler(&sender),
         }
