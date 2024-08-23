@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::Local;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use gtk4::prelude::*;
 use relm4::{
@@ -20,7 +20,7 @@ use tokio::time::sleep;
 #[cfg(feature = "gtk4_8")]
 use crate::config::BgFit;
 
-use super::messages::{CommandMsg, InputMsg, UserInfo};
+use super::messages::{CommandMsg, InputMsg};
 use super::model::{Greeter, InputMode, Updates};
 use super::templates::Ui;
 
@@ -66,39 +66,6 @@ fn setup_settings(model: &Greeter, root: &gtk::ApplicationWindow) {
     };
 }
 
-/// Populate the user and session combo boxes with entries.
-fn setup_users_sessions(model: &Greeter, widgets: &GreeterWidgets) {
-    // The user that is shown during initial login
-    let mut initial_username = None;
-
-    // Populate the usernames combo box.
-    for (user, username) in model.sys_util.get_users().iter() {
-        debug!("Found user: {user}");
-        if initial_username.is_none() {
-            initial_username = Some(username.clone());
-        }
-        widgets.ui.usernames_box.append(Some(username), user);
-    }
-
-    // If the last user is known, show their login initially.
-    if let Some(last_user) = model.cache.get_last_user() {
-        initial_username = Some(last_user.to_string());
-    } else if let Some(user) = &initial_username {
-        info!("Using first found user '{user}' as initial user");
-    }
-
-    // Set the user shown initially at login.
-    if !widgets
-        .ui
-        .usernames_box
-        .set_active_id(initial_username.as_deref())
-    {
-        if let Some(user) = initial_username {
-            warn!("Couldn't find user '{user}' to set as the initial user");
-        }
-    }
-}
-
 /// Set up auto updation for the datetime label.
 fn setup_datetime_display(sender: &AsyncComponentSender<Greeter>) {
     // Set a timer in a separate thread that signals the main thread to update the time, so as to
@@ -132,6 +99,23 @@ impl AsyncComponent for Greeter {
     type Init = GreeterInit;
     type CommandOutput = CommandMsg;
 
+    // UI flow:
+    //
+    // Open user/session screen
+    //
+    // when login, create session and unless can start session (in which case start it) go to auth page
+    //
+    // On auth page both user and session widget active. If session widget changed, update model,
+    // if user widget changed, cancel this session, start new session with that user. However, no
+    // type input. For type input, go to main screen. Or make it so that there's pressing enter required
+    // to confirm username and display this enter requirement to the user. But at this point, it's just
+    // the main screen.
+    //
+    // TODO: Also add an (i) hint thing to the second screen where if you hover over it or click ...
+    // or some, it tells you that this dropdown switches to a different user.
+    //
+    // At this point what is even the point of having a second screen? Oh, its to prevent PAM and greetd timeouts.
+
     view! {
         // The `view!` macro needs a proper widget, not a template, as the root.
         #[name = "window"]
@@ -150,7 +134,11 @@ impl AsyncComponent for Greeter {
                     } else {
                         // TODO: THIS BOX PREVENTS TOUCH EVENTS FROM GOING TO THE PASSWORD FIELD, REMOVE IT
                         gtk::Box {}
-                    }
+                    },
+
+                    // TODO: Lock this widget after session is created
+                    attach[1, 1, 2, 1] = model.user_selector.widget() {
+                    },
                 },
 
                 #[template_child]
@@ -172,31 +160,6 @@ impl AsyncComponent for Greeter {
                     set_visible: !model.updates.is_input(),
                 },
                 #[template_child]
-                usernames_box {
-                    #[track(
-                        model.updates.changed(Updates::manual_user_mode())
-                        || model.updates.changed(Updates::input_mode())
-                    )]
-                    set_sensitive: !model.updates.manual_user_mode && !model.updates.is_input(),
-                    #[track(model.updates.changed(Updates::manual_user_mode()))]
-                    set_visible: !model.updates.manual_user_mode,
-                    connect_changed[sender, username_entry] => move |this| sender.input(
-                        Self::Input::UserChanged(
-                            UserInfo::extract(this, &username_entry)
-                        )
-                    ),
-                },
-                #[template_child]
-                username_entry {
-                    #[track(
-                        model.updates.changed(Updates::manual_user_mode())
-                        || model.updates.changed(Updates::input_mode())
-                    )]
-                    set_sensitive: model.updates.manual_user_mode && !model.updates.is_input(),
-                    #[track(model.updates.changed(Updates::manual_user_mode()))]
-                    set_visible: model.updates.manual_user_mode,
-                },
-                #[template_child]
                 input_label {
                     #[track(model.updates.changed(Updates::input_mode()))]
                     set_visible: model.updates.is_input(),
@@ -207,43 +170,41 @@ impl AsyncComponent for Greeter {
                 secret_entry {
                     #[track(model.updates.changed(Updates::input_mode()))]
                     set_visible: model.updates.input_mode == InputMode::Secret,
+
                     #[track(
                         model.updates.changed(Updates::input_mode())
                         && model.updates.input_mode == InputMode::Secret
                     )]
                     grab_focus: (),
+
                     #[track(model.updates.changed(Updates::input()))]
                     set_text: &model.updates.input,
-                    connect_activate[sender, usernames_box, username_entry] => move |this| {
-                        sender.input(Self::Input::Login {
-                            input: this.text().to_string(),
-                            info: UserInfo::extract( &usernames_box, &username_entry),
-                        })
-                    }
+
+                    connect_changed[sender] => move |this| {
+                        sender.input(Self::Input::CredentialChanged(this.text().to_string()))
+                    },
+
+                    connect_activate => Self::Input::SendAuthResp,
                 },
                 #[template_child]
                 visible_entry {
                     #[track(model.updates.changed(Updates::input_mode()))]
                     set_visible: model.updates.input_mode == InputMode::Visible,
+
                     #[track(
                         model.updates.changed(Updates::input_mode())
                         && model.updates.input_mode == InputMode::Visible
                     )]
                     grab_focus: (),
+
                     #[track(model.updates.changed(Updates::input()))]
                     set_text: &model.updates.input,
-                    connect_activate[sender, usernames_box, username_entry] => move |this| {
-                        sender.input(Self::Input::Login {
-                            input: this.text().to_string(),
-                            info: UserInfo::extract(&usernames_box, &username_entry),
-                        })
-                    }
-                },
-                #[template_child]
-                user_toggle {
-                    #[track(model.updates.changed(Updates::input_mode()))]
-                    set_sensitive: !model.updates.is_input(),
-                    connect_clicked => Self::Input::ToggleManualUser,
+
+                    connect_changed[sender] => move |this| {
+                        sender.input(Self::Input::CredentialChanged(this.text().to_string()))
+                    },
+
+                    connect_activate => Self::Input::SendAuthResp,
                 },
                 #[template_child]
                 cancel_button {
@@ -258,27 +219,8 @@ impl AsyncComponent for Greeter {
                         && !model.updates.is_input()
                     )]
                     grab_focus: (),
-                    connect_clicked[
-                        sender,
-                        secret_entry,
-                        visible_entry,
-                        usernames_box,
-                        username_entry,
-                    ] => move |_| {
-                        sender.input(Self::Input::Login {
-                            input: if secret_entry.is_visible() {
-                                // This should correspond to `InputMode::Secret`.
-                                secret_entry.text().to_string()
-                            } else if EntryExt::is_visible(&visible_entry) {
-                                // This should correspond to `InputMode::Visible`.
-                                visible_entry.text().to_string()
-                            } else {
-                                // This should correspond to `InputMode::None`.
-                                String::new()
-                            },
-                            info: UserInfo::extract(&usernames_box, &username_entry),
-                        })
-                    }
+
+                    connect_clicked => Self::Input::SendAuthResp,
                 },
                 #[template_child]
                 error_info {
@@ -352,7 +294,6 @@ impl AsyncComponent for Greeter {
         // For some reason, the GTK settings are reset when changing monitors, so apply them after
         // full-screening.
         setup_settings(&model, &root);
-        setup_users_sessions(&model, &widgets);
         setup_datetime_display(&sender);
 
         if input.css_path.exists() {
@@ -384,21 +325,16 @@ impl AsyncComponent for Greeter {
         self.updates.reset();
 
         match msg {
-            Self::Input::Login { input, info } => {
-                self.sess_info = Some(info);
-                self.login_click_handler(&sender, input).await
-            }
-            Self::Input::Cancel => self.cancel_click_handler().await,
-            Self::Input::UserChanged(info) => {
-                self.sess_info = Some(info);
-                self.user_change_handler();
-            }
-            Self::Input::ToggleManualUser => self
-                .updates
-                .set_manual_user_mode(!self.updates.manual_user_mode),
+            Self::Input::UserSelected(new) => self.selected_user = new,
             Self::Input::SessionSelected(str) => {
                 self.selected_session = str;
             }
+
+            Self::Input::CredentialChanged(new) => self.credential = new,
+            Self::Input::SendAuthResp => self.login_click_handler(&sender).await,
+
+            Self::Input::Cancel => self.cancel_click_handler().await,
+
             Self::Input::Reboot => self.reboot_click_handler(&sender),
             Self::Input::PowerOff => self.poweroff_click_handler(&sender),
         }

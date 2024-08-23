@@ -6,46 +6,29 @@
 
 use derivative::Derivative;
 use greetd_ipc::Response;
-use relm4::gtk::{glib::GString, prelude::*, ComboBoxText, Entry};
 
 use super::model::SessionSelection;
-
-#[derive(Debug)]
-/// Info about the current user and chosen session
-pub struct UserInfo {
-    /// The ID for the currently chosen user
-    pub(super) user_id: Option<GString>,
-    /// The entry text for the currently chosen user
-    pub(super) user_text: GString,
-}
-
-impl UserInfo {
-    /// Extract session and user info from the relevant widgets.
-    pub(super) fn extract(usernames_box: &ComboBoxText, username_entry: &Entry) -> Self {
-        Self {
-            user_id: usernames_box.active_id(),
-            user_text: username_entry.text(),
-        }
-    }
-}
 
 /// The messages sent by the view to the model
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum InputMsg {
-    /// Login request
-    Login {
-        #[derivative(Debug = "ignore")]
-        input: String,
-        info: UserInfo,
-    },
+    SessionSelected(SessionSelection),
+    UserSelected(
+        /// The username of the selected user
+        String,
+    ),
+
+    /// Sent by the credential input to indicate an update of the credential string.
+    CredentialChanged(#[derivative(Debug = "ignore")] String),
+
+    /// Sent when the user does something that indicates they've filled out the credentia field
+    /// and wanna send an auth message to greetd. Examples: enter button in text inputs, login button.
+    SendAuthResp,
+
     /// Cancel the login request
     Cancel,
-    /// The current user was changed in the GUI.
-    UserChanged(UserInfo),
-    SessionSelected(SessionSelection),
-    /// Toggle manual entry of user.
-    ToggleManualUser,
+
     Reboot,
     PowerOff,
 }
@@ -61,5 +44,5 @@ pub enum CommandMsg {
     HandleGreetdResponse(Response),
     /// Notify the greeter that a monitor was removed.
     // The Gstring is the name of the display.
-    MonitorRemoved(GString),
+    MonitorRemoved(String),
 }

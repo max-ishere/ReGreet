@@ -29,7 +29,7 @@ use crate::sysutil::SysUtil;
 
 use super::{
     component::{EntryOrDropDown, Selector, SelectorInit, SelectorOption, SelectorOutput},
-    messages::{CommandMsg, InputMsg, UserInfo},
+    messages::{CommandMsg, InputMsg},
 };
 
 const ERROR_MSG_CLEAR_DELAY: u64 = 5;
@@ -85,8 +85,6 @@ pub struct Greeter {
     pub(super) cache: Cache,
     /// The config for this greeter
     pub(super) config: Config,
-    /// Session info set after pressing login
-    pub(super) sess_info: Option<UserInfo>,
     /// The updates from the model that are read by the view
     pub(super) updates: Updates,
     /// Is it run as demo
@@ -94,9 +92,15 @@ pub struct Greeter {
 
     #[doc(hidden)]
     pub(super) session_selector: Controller<Selector>,
-
-    /// What the session input component reports as the current user selection
+    /// What the session input component reports as the current session selection
     pub(super) selected_session: SessionSelection,
+
+    #[doc(hidden)]
+    pub(super) user_selector: Controller<Selector>,
+    /// What the user input component reports as the current user selection
+    pub(super) selected_user: String,
+
+    pub(super) credential: String,
 }
 
 #[derive(Debug, Clone)]
@@ -131,13 +135,13 @@ impl Greeter {
             })
             .collect();
 
-        let initial_selection = EntryOrDropDown::DropDown(sessions[0].id.clone());
+        let initial_session = EntryOrDropDown::DropDown(sessions[0].id.clone());
 
         let session_selector = Selector::builder()
             .launch(SelectorInit {
                 entry_placeholder: "Session command".to_string(),
                 options: sessions.clone(),
-                initial_selection: initial_selection.clone(),
+                initial_selection: initial_session.clone(),
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter session command".to_string(),
             })
@@ -149,6 +153,34 @@ impl Greeter {
                     SelectorOutput::CurrentSelection(EntryOrDropDown::Entry(other)) => {
                         SessionSelection::Cmd(other)
                     }
+                })
+            });
+
+        let users: Vec<_> = sys_util
+            .get_users()
+            .iter()
+            .map(|(fullname, username)| SelectorOption {
+                id: username.clone(),
+                text: fullname.clone(),
+            })
+            .collect();
+
+        let initial_user = EntryOrDropDown::DropDown(users[0].id.clone());
+
+        let user_selector = Selector::builder()
+            .launch(SelectorInit {
+                entry_placeholder: "System username".to_string(),
+                options: users.clone(),
+                initial_selection: initial_user.clone(),
+                toggle_icon_name: "document-edit-symbolic".to_string(),
+                toggle_tooltip: "Manually enter a system username".to_string(),
+            })
+            .forward(sender.input_sender(), move |output| {
+                InputMsg::UserSelected(match output {
+                    SelectorOutput::CurrentSelection(EntryOrDropDown::DropDown(choice_id)) => {
+                        choice_id
+                    }
+                    SelectorOutput::CurrentSelection(EntryOrDropDown::Entry(raw)) => raw,
                 })
             });
 
@@ -175,13 +207,20 @@ impl Greeter {
             greetd_client,
             sys_util,
             cache: Cache::new(),
-            sess_info: None,
             config,
             updates,
             demo,
 
             session_selector,
-            selected_session: initial_selection.into(),
+            selected_session: initial_session.into(),
+
+            user_selector,
+            selected_user: match initial_user {
+                EntryOrDropDown::Entry(username) => username,
+                EntryOrDropDown::DropDown(username) => username,
+            },
+
+            credential: String::new(),
         }
     }
 
@@ -214,7 +253,9 @@ impl Greeter {
             let sender = sender.clone();
             monitor.connect_invalidate(move |monitor| {
                 let display_name = monitor.display().name();
-                sender.oneshot_command(async move { CommandMsg::MonitorRemoved(display_name) })
+                sender.oneshot_command(async move {
+                    CommandMsg::MonitorRemoved(display_name.to_string())
+                })
             });
             if chosen_monitor.is_none() {
                 // Choose the first monitor.
@@ -285,11 +326,6 @@ impl Greeter {
 
     /// Create a greetd session, i.e. start a login attempt for the current user.
     async fn create_session(&mut self, sender: &AsyncComponentSender<Self>) {
-        let Some(username) = self.get_current_username() else {
-            // No username found (which shouldn't happen), so we can't create the session.
-            return;
-        };
-
         // Before trying to create a session, check if the session command (if manually entered) is
         // valid.
         if let SessionSelection::Cmd(ref cmd) = self.selected_session {
@@ -305,17 +341,21 @@ impl Greeter {
             debug!("Manually entered session command is parsable");
         };
 
-        info!("Creating session for user: {username}");
+        info!("Creating session for user: {}", self.selected_user);
 
         // Create a session for the current user.
         let response = self
             .greetd_client
             .lock()
             .await
-            .create_session(&username)
+            .create_session(&self.selected_user)
             .await
             .unwrap_or_else(|err| {
-                panic!("Failed to create session for username '{username}': {err}",)
+                // TODO: Maybe not panic here
+                panic!(
+                    "Failed to create session for username '{username}': {err}",
+                    username = self.selected_user,
+                )
             });
 
         self.handle_greetd_response(sender, response).await;
@@ -429,21 +469,17 @@ impl Greeter {
     /// This changes the session in the combo box according to the last used session of the current user.
     #[instrument(skip_all)]
     pub(super) fn user_change_handler(&mut self) {
-        let username = if let Some(username) = self.get_current_username() {
-            username
-        } else {
-            // No username found (which shouldn't happen), so we can't change the session.
+        let Some(last_session) = self.cache.get_last_session(&self.selected_user) else {
+            debug!(
+                "Last session for user '{username}' missing",
+                username = self.selected_user
+            );
+
             return;
         };
 
-        if let Some(last_session) = self.cache.get_last_session(&username) {
-            // Set the last session used by this user in the session combo box.
-            self.updates
-                .set_active_session_id(Some(last_session.to_string()));
-        } else {
-            // Last session not found, so skip changing the session.
-            info!("Last session for user '{username}' missing");
-        };
+        self.updates
+            .set_active_session_id(Some(last_session.to_string()));
     }
 
     /// Event handler for clicking the "Login" button
@@ -452,11 +488,7 @@ impl Greeter {
     ///     - Begins a login attempt for the given user
     ///     - Submits the entered password for logging in and starts the session
     #[instrument(skip_all)]
-    pub(super) async fn login_click_handler(
-        &mut self,
-        sender: &AsyncComponentSender<Self>,
-        input: String,
-    ) {
+    pub(super) async fn login_click_handler(&mut self, sender: &AsyncComponentSender<Self>) {
         // Check if a password is needed. If not, then directly start the session.
         let auth_status = self.greetd_client.lock().await.get_auth_status().clone();
         match auth_status {
@@ -467,7 +499,7 @@ impl Greeter {
                 self.start_session(sender).await;
             }
             AuthStatus::InProgress => {
-                self.send_input(sender, input).await;
+                self.send_input(sender, self.credential.clone()).await;
             }
             AuthStatus::NotStarted => {
                 self.create_session(sender).await;
@@ -490,25 +522,6 @@ impl Greeter {
             .unwrap_or_else(|err| panic!("Failed to send input: {err}"));
 
         self.handle_greetd_response(sender, resp).await;
-    }
-
-    /// Get the currently selected username.
-    fn get_current_username(&self) -> Option<String> {
-        let info = self.sess_info.as_ref().expect("No session info set yet");
-        if self.updates.manual_user_mode {
-            debug!(
-                "Retrieved username '{}' through manual entry",
-                info.user_text
-            );
-            Some(info.user_text.to_string())
-        } else if let Some(username) = &info.user_id {
-            // Get the currently selected user's ID, which should be their username.
-            debug!("Retrieved username '{username}' from options");
-            Some(username.to_string())
-        } else {
-            error!("No username entered");
-            None
-        }
     }
 
     /// Get the currently selected session name (if available) and command.
@@ -559,13 +572,14 @@ impl Greeter {
             environment.push(format!("{}={}", k, v));
         }
 
-        if let Some(username) = self.get_current_username() {
-            self.cache.set_last_user(&username);
-            if let Some(session) = session {
-                self.cache.set_last_session(&username, &session);
-            }
-            debug!("Updated cache with current user: {username}");
+        self.cache.set_last_user(&self.selected_user);
+        if let Some(session) = session {
+            self.cache.set_last_session(&self.selected_user, &session);
         }
+        debug!(
+            "Updated cache with current user: {username}",
+            username = self.selected_user
+        );
 
         if !self.demo {
             info!("Saving cache to disk");
@@ -623,6 +637,7 @@ impl Drop for Greeter {
     fn drop(&mut self) {
         // Cancel any created session, just to be safe.
         let client = Arc::clone(&self.greetd_client);
+        debug!("Canceling session in Greeter::Drop");
         tokio::spawn(async move {
             client
                 .lock()

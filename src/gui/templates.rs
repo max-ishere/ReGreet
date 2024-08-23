@@ -84,14 +84,6 @@ impl WidgetTemplate for Ui {
                         set_height_request: 45,
                     },
 
-                    /// Widget containing the usernames
-                    #[name = "usernames_box"]
-                    attach[1, 1, 1, 1] = &gtk::ComboBoxText { set_hexpand: true },
-
-                    /// Widget where the user enters the username
-                    #[name = "username_entry"]
-                    attach[1, 1, 1, 1] = &gtk::Entry { set_hexpand: true },
-
                     /// Label for the password widget
                     #[name = "input_label"]
                     #[template]
@@ -106,13 +98,6 @@ impl WidgetTemplate for Ui {
                     /// Widget where the user enters something visible
                     #[name = "visible_entry"]
                     attach[1, 2, 1, 1] = &gtk::Entry,
-
-                    /// Button to toggle manual user entry
-                    #[name = "user_toggle"]
-                    attach[2, 1, 1, 1] = &gtk::ToggleButton {
-                        set_icon_name: "document-edit-symbolic",
-                        set_tooltip_text: Some("Manually enter username"),
-                    },
 
                     attach[1, 3, 2, 1] = &gtk::Box {
                         set_halign: gtk::Align::End,
