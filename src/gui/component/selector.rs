@@ -70,6 +70,7 @@ impl SimpleComponent for Selector {
 
             #[transition = "SlideLeftRight"]
             append = match &model.selection {
+
                 EntryOrDropDown::DropDown(_) => {
                     #[name = "combo_box"]
                     gtk::ComboBoxText {
@@ -146,6 +147,8 @@ impl SimpleComponent for Selector {
         options
             .iter()
             .for_each(|opt| widgets.combo_box.append(Some(&opt.id), &opt.text));
+
+        // TODO: Figure out if `update` should be supressed.
 
         let id_comes_from_options = widgets.combo_box.set_active_id(Some(&model.last_option_id));
 

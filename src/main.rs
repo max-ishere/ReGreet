@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod cache;
-mod client;
+// mod client;
 mod config;
 mod constants;
+mod greetd;
 mod gui;
 mod sysutil;
 mod tomlutils;

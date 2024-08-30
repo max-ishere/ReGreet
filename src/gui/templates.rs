@@ -18,13 +18,35 @@ impl WidgetTemplate for EndButton {
     }
 }
 
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for LoginButton {
+    view! {
+        gtk::Button {
+            set_focusable: true,
+            set_label: "Login",
+            set_receives_default: true,
+            add_css_class: "suggested-action",
+        }
+    }
+}
+
 /// Label for an entry/combo box
 #[relm4::widget_template(pub)]
 impl WidgetTemplate for EntryLabel {
     view! {
         gtk::Label {
-            set_width_request: 100,
             set_xalign: 1.0,
+        }
+    }
+}
+
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for PaddedGrid {
+    view! {
+        gtk::Grid {
+            set_column_spacing: 15,
+            set_row_spacing: 15,
+            set_margin_all: 15,
         }
     }
 }
@@ -43,83 +65,6 @@ impl WidgetTemplate for Ui {
                 set_halign: gtk::Align::Center,
                 set_valign: gtk::Align::Center,
                 inline_css: "background-color: @theme_bg_color",
-
-                #[name = "grid"]
-                gtk::Grid {
-                    set_column_spacing: 15,
-                    set_margin_bottom: 15,
-                    set_margin_end: 15,
-                    set_margin_start: 15,
-                    set_margin_top: 15,
-                    set_row_spacing: 15,
-                    set_width_request: 500,
-
-                    /// Widget to display messages to the user
-                    #[name = "message_label"]
-                    attach[0, 0, 3, 1] = &gtk::Label {
-                        set_margin_bottom: 15,
-
-                        // Format all messages in boldface.
-                        #[wrap(Some)]
-                        set_attributes = &gtk::pango::AttrList {
-                            insert: {
-                                let mut font_desc = gtk::pango::FontDescription::new();
-                                font_desc.set_weight(gtk::pango::Weight::Bold);
-                                gtk::pango::AttrFontDesc::new(&font_desc)
-                            },
-                        },
-                    },
-
-                    #[template]
-                    attach[0, 1, 1, 1] = &EntryLabel {
-                        set_label: "User:",
-                        set_height_request: 45,
-                    },
-
-                    /// Label for the sessions widget
-                    #[name = "session_label"]
-                    #[template]
-                    attach[0, 2, 1, 1] = &EntryLabel {
-                        set_label: "Session:",
-                        set_height_request: 45,
-                    },
-
-                    /// Label for the password widget
-                    #[name = "input_label"]
-                    #[template]
-                    attach[0, 2, 1, 1] = &EntryLabel {
-                        set_height_request: 45,
-                    },
-
-                    /// Widget where the user enters a secret
-                    #[name = "secret_entry"]
-                    attach[1, 2, 1, 1] = &gtk::PasswordEntry { set_show_peek_icon: true },
-
-                    /// Widget where the user enters something visible
-                    #[name = "visible_entry"]
-                    attach[1, 2, 1, 1] = &gtk::Entry,
-
-                    attach[1, 3, 2, 1] = &gtk::Box {
-                        set_halign: gtk::Align::End,
-                        set_spacing: 15,
-
-                        /// Button to cancel password entry
-                        #[name = "cancel_button"]
-                        gtk::Button {
-                            set_focusable: true,
-                            set_label: "Cancel",
-                        },
-
-                        /// Button to enter the password and login
-                        #[name = "login_button"]
-                        gtk::Button {
-                            set_focusable: true,
-                            set_label: "Login",
-                            set_receives_default: true,
-                            add_css_class: "suggested-action",
-                        },
-                    },
-                },
             },
 
             /// Clock widget

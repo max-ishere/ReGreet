@@ -1211,6 +1211,7 @@ dependencies = [
  "pwd",
  "regex",
  "relm4",
+ "replace_with",
  "serde",
  "shlex",
  "thiserror",
@@ -1249,6 +1250,12 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
+
+[[package]]
+name = "replace_with"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a8614ee435691de62bcffcf4a66d91b3594bf1428a5722e79103249a095690"
 
 [[package]]
 name = "rustc-demangle"
