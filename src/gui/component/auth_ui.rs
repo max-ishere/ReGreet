@@ -85,6 +85,7 @@ where
                 set_height_request: LABEL_HEIGHT_REQUEST,
             },
 
+            // TODO: Change the session when the user is changed.
             attach[1, SESSION_ROW, 1, 1] = model.session_selector.widget(),
 
             attach[0, AUTH_ROW, 2, 1] = model.auth_view.widget(),

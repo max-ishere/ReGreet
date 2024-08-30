@@ -1,13 +1,10 @@
-use std::mem::{self, replace, take};
+use std::mem::{replace, take};
 
 use derivative::Derivative;
 use gtk4::prelude::*;
 use relm4::component::{AsyncComponentParts, SimpleAsyncComponent};
 use relm4::{prelude::*, AsyncComponentSender};
-use replace_with::replace_with_or_abort;
-use tokio::runtime::Handle;
-use tokio::task::block_in_place;
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::greetd::{
     AuthInformative, AuthInformativeResponse, AuthQuestion, AuthQuestionResponse, AuthResponse,
@@ -15,55 +12,95 @@ use crate::greetd::{
 };
 use crate::gui::templates::LoginButton;
 
+/// Initializes the login controls of the greeter.
 pub struct AuthViewInit<Client>
 where
     Client: Greetd + 'static,
 {
+    /// Initial session state. This way you can present a password prompt immediately on startup.
     pub greetd_state: GreetdState<Client>,
+    /// Specifies what username should be used when creating a session.
+    /// This is stored in the model and when the username changes the previous session is canceled.
+    // TODO: Cancel the session when the username is changed.
     pub username: String,
+    /// What command to execute when the session is started.
     pub command: Vec<String>,
+    /// What env to use when the session is started.
     pub env: Vec<String>,
 }
 
+/// Shows greetd session controls.
 pub struct AuthView<Client>
 where
     Client: Greetd + 'static,
 {
+    /// Represents what UI is shown to the user.
     greetd_state: GreetdState<Client>,
+    /// Username to use when creating a new session. When a different username is set by the parent widget, the current session is canceled.
     username: String,
+    /// Command to use when starting a session. This is updated by the parent widget.
     command: Vec<String>,
+    /// Env to use when starting a session. This is updated by the parent widget.
     env: Vec<String>,
+
+    /// A bool to conditionally reset the question inputs.
+    /// Use of tracker::track would not solve the issue because we want to perform a reset after an authentication has succeeded
+    /// or when a session is created.
+    reset_question: bool,
 }
 pub enum GreetdState<Client>
 where
     Client: Greetd,
 {
+    /// In the UI, shows a single login button. When pressed, uses the username stored to start a session.
     NotStarted(Client),
+
+    /// The session requires no further authentication and can be started. This looks like an info box with a login button.
     Startable(Client::StartableSession),
+
+    /// An auth prompt (either secret or visible)
     AuthQuestion {
+        /// Can be used to retrieve the prompt text and it's type.
         session: Client::AuthQuestion,
+        /// The current value of the input that will be sent to greetd when the login button is pressed.
         credential: String,
     },
+
+    /// An informative auth prompt from greetd. Looks like an info box with the message type set according to what the prompt is - info or error.
     AuthInformative(Client::AuthInformative),
+
+    /// Used as a placeholder to do 2 things.
+    /// 1. Lock the UI while a greetd operation takes place (shows an info box with no buttons).
+    /// 2. A temporary value that can be used to move session state out of `&mut self`
     Loading(
-        /// Message shown while loading
+        /// Message shown while an operation is pending. This will always be an info message type.
         String,
     ),
 }
 
 #[derive(Debug)]
 pub enum AuthViewOutput {
-    /// Tell the parent to show an error that occured during authentication
+    /// Tell the parent to show an error that occured during greetd IPC communication.
     NotifyError(String),
 }
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum AuthViewMsg {
+    /// Internal message
+    ///
+    /// Emited by the question auth inputs to update the response.
     CredentialChanged(#[derivative(Debug = "ignore")] String),
 
+    /// Internal message
+    ///
+    /// Cancels the session
     Cancel,
-    Submit,
+
+    /// Internal message
+    ///
+    /// Advances the authentication to the next step.
+    AdvanceAuthentication,
 }
 
 #[relm4::component(pub, async)]
@@ -81,12 +118,8 @@ where
             set_orientation: gtk::Orientation::Vertical,
 
             #[name = "auth_conditional"]
-            #[transition = "OverDown"]
+            #[transition = "SlideUpDown"]
             match &model.greetd_state {
-                GreetdState::NotStarted(_) => gtk::Box {
-                    set_halign: gtk::Align::End,
-                    #[template] LoginButton { connect_clicked => AuthViewMsg::Submit },
-                }
                 GreetdState::Startable(_) => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
@@ -103,9 +136,10 @@ where
                     #[template]
                     append = &LoginBox {
                         #[template] CancelButton { connect_clicked => AuthViewMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => AuthViewMsg::Submit },
+                        #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
                     }
                 }
+
                 GreetdState::AuthQuestion{ session: question, .. } => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
@@ -120,11 +154,17 @@ where
                             #[watch]
                             set_placeholder_text: Some(prompt),
 
+                            #[track( model.reset_question )]
+                            set_text: "",
+
                             connect_changed[sender] => move |this| sender.input(Self::Input::CredentialChanged(this.text().to_string())),
                         }
                         AuthQuestion::Visible(prompt) => gtk::Entry {
                             #[watch]
                             set_placeholder_text: Some(prompt),
+
+                            #[track( model.reset_question )]
+                            set_text: "",
 
                             connect_changed[sender] => move |this| sender.input(Self::Input::CredentialChanged(this.text().to_string())),
                         }
@@ -133,9 +173,10 @@ where
                     #[template]
                     append = &LoginBox {
                         #[template] CancelButton { connect_clicked => AuthViewMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => AuthViewMsg::Submit },
+                        #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
                     }
                 }
+
                 GreetdState::AuthInformative(informative) => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
@@ -158,21 +199,23 @@ where
                     #[template]
                     append = &LoginBox {
                         #[template] CancelButton { connect_clicked => AuthViewMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => AuthViewMsg::Submit },
+                        #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
                     }
                 }
 
-                GreetdState::Loading(message) => gtk::Box {
-                    set_spacing: 15,
+                GreetdState::NotStarted(_) => gtk::Box {
+                    set_halign: gtk::Align::End,
+                    #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
+                }
+
+                GreetdState::Loading(message) => gtk::InfoBar {
+                    set_show_close_button: false,
+                    set_message_type: gtk::MessageType::Info,
 
                     gtk::Label {
                         #[watch]
                         set_text: message.as_str(),
                         set_valign: gtk::Align::Start,
-                    },
-
-                    append = &gtk::ProgressBar {
-                        pulse: (),
                     }
                 }
             },
@@ -196,6 +239,8 @@ where
             username,
             command,
             env,
+
+            reset_question: false,
         };
         let widgets = view_output!();
 
@@ -207,6 +252,8 @@ where
     }
 
     async fn update(&mut self, message: Self::Input, sender: AsyncComponentSender<Self>) {
+        self.reset_question = false;
+
         match message {
             AuthViewMsg::CredentialChanged(new_cred) => {
                 if let GreetdState::AuthQuestion {
@@ -217,7 +264,7 @@ where
                 }
             }
             AuthViewMsg::Cancel => self.cancel_session(&sender).await,
-            AuthViewMsg::Submit => self.progress_login(&sender).await,
+            AuthViewMsg::AdvanceAuthentication => self.advance_authentication(&sender).await,
         };
     }
 }
@@ -278,7 +325,7 @@ where
         };
     }
 
-    pub async fn progress_login(&mut self, sender: &AsyncComponentSender<Self>) {
+    pub async fn advance_authentication(&mut self, sender: &AsyncComponentSender<Self>) {
         use GreetdState as S;
 
         let greetd_state = replace(
@@ -289,9 +336,10 @@ where
         let maybe_startable = match greetd_state {
             S::Loading(old) => S::Loading(old),
 
-            GreetdState::NotStarted(client) => {
-                report_error(try_create_session(client, &self.username).await, sender)
-            }
+            GreetdState::NotStarted(client) => report_error(
+                try_create_session(client, &self.username, || self.reset_question = true).await,
+                sender,
+            ),
             GreetdState::Startable(startable) => GreetdState::Startable(startable),
             GreetdState::AuthQuestion {
                 session,
@@ -304,12 +352,16 @@ where
                         credential: credential.clone(),
                     },
                     Some(credential.clone()),
+                    || self.reset_question = true,
                 )
                 .await,
                 sender,
             ),
             GreetdState::AuthInformative(informative) => report_error(
-                try_auth(informative, S::AuthInformative, None).await,
+                try_auth(informative, S::AuthInformative, None, || {
+                    self.reset_question = true
+                })
+                .await,
                 sender,
             ),
         };
@@ -362,6 +414,7 @@ where
 async fn try_create_session<Client>(
     client: Client,
     username: &str,
+    on_auth: impl FnOnce(),
 ) -> Result<GreetdState<Client>, (GreetdState<Client>, String)>
 where
     Client: Greetd,
@@ -379,10 +432,13 @@ where
     use CreateSessionResponse as R;
     Ok(match session {
         R::Success(startable) => GreetdState::Startable(startable),
-        R::AuthQuestion(question) => GreetdState::AuthQuestion {
-            session: question,
-            credential: String::new(),
-        },
+        R::AuthQuestion(question) => {
+            on_auth();
+            GreetdState::AuthQuestion {
+                session: question,
+                credential: String::new(),
+            }
+        }
         R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
     })
 }
@@ -439,6 +495,7 @@ async fn try_auth<Message>(
     message: Message,
     variant: impl FnOnce(Message) -> GreetdState<<Message as AuthResponse>::Client>,
     credential: Option<String>,
+    on_success: impl FnOnce(),
 ) -> Result<
     GreetdState<<Message as AuthResponse>::Client>,
     (GreetdState<<Message as AuthResponse>::Client>, String),
@@ -446,11 +503,7 @@ async fn try_auth<Message>(
 where
     Message: AuthResponse,
 {
-    let session = block_in_place(move || {
-        Handle::current().block_on(async { message.respond(credential).await })
-    });
-
-    let res = match session {
+    let res = match message.respond(credential).await {
         Ok(res) => res,
         Err((message, err)) => return Err((variant(message), format!("{}", err))),
     };
@@ -459,6 +512,8 @@ where
         Ok(session) => session,
         Err((message, err)) => return Err((variant(message), format!("{}", err))),
     };
+
+    on_success();
 
     use CreateSessionResponse as R;
     Ok(match session {
