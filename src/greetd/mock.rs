@@ -40,9 +40,7 @@ impl AuthResponse for MockGreetd {
     type Client = Self;
 
     fn message<'a>(&'a self) -> AuthMessage<'a> {
-        AuthMessage::Visible(
-            "OTP Code (someone said theirs is long, so here we go, lorem ipsum dolor sit amet)",
-        )
+        AuthMessage::Secret("Password")
     }
 
     async fn respond(
