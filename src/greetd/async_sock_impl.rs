@@ -9,7 +9,7 @@ use super::{
     CreateSessionResponse, Greetd, StartableSession,
 };
 
-trait TokioRW: AsyncReadExt + AsyncWriteExt + std::marker::Unpin + Send {}
+pub(crate) trait TokioRW: AsyncReadExt + AsyncWriteExt + std::marker::Unpin + Send {}
 
 pub struct AuthMessage<RW>
 where
@@ -73,7 +73,7 @@ where
     type Error = greetd_ipc::codec::Error;
 
     async fn create_session(
-        mut self,
+        self,
         username: &str,
     ) -> super::Response<Self, Self, CreateSessionResponse<Self>> {
         info!("Creating session for user: {username}");
@@ -138,10 +138,7 @@ where
                 error_type: ErrorType::Error,
                 description,
             } => Ok(Err((client, super::RequestError::Error(description)))),
-            Response::AuthMessage {
-                auth_message_type,
-                auth_message,
-            } => unreachable!(
+            Response::AuthMessage { .. } => unreachable!(
                 "greetd responded with auth request when starting an authenticated session"
             ),
         }

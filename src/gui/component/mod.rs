@@ -104,23 +104,6 @@ impl AsyncComponent for Greeter {
     type Init = GreeterInit;
     type CommandOutput = CommandMsg;
 
-    // UI flow:
-    //
-    // Open user/session screen
-    //
-    // when login, create session and unless can start session (in which case start it) go to auth page
-    //
-    // On auth page both user and session widget active. If session widget changed, update model,
-    // if user widget changed, cancel this session, start new session with that user. However, no
-    // type input. For type input, go to main screen. Or make it so that there's pressing enter required
-    // to confirm username and display this enter requirement to the user. But at this point, it's just
-    // the main screen.
-    //
-    // TODO: Also add an (i) hint thing to the second screen where if you hover over it or click ...
-    // or some, it tells you that this dropdown switches to a different user.
-    //
-    // At this point what is even the point of having a second screen? Oh, its to prevent PAM and greetd timeouts.
-
     view! {
         #[name = "window"]
         gtk::ApplicationWindow {
@@ -144,7 +127,7 @@ impl AsyncComponent for Greeter {
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let model = Self::new(&input.config_path, input.demo, &sender).await;
+        let model = Self::new(&input.config_path, input.demo).await;
 
         let widgets = view_output!();
 

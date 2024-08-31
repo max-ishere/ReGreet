@@ -2,14 +2,16 @@ use derivative::Derivative;
 use gtk4::prelude::*;
 use relm4::component::{AsyncComponent as _, AsyncComponentController as _, AsyncController};
 use relm4::prelude::*;
+use tracing::error;
 
 use crate::greetd::Greetd;
 use crate::gui::component::auth_view::AuthViewInit;
 use crate::gui::component::{AuthViewOutput, SelectorInit, SelectorOutput};
 use crate::gui::templates::EntryLabel;
+use crate::sysutil::SysUtil;
 
 use super::auth_view::{AuthView, GreetdState};
-use super::{EntryOrDropDown, Selector, SelectorOption};
+use super::{AuthViewMsg, EntryOrDropDown, Selector, SelectorOption};
 
 const LABEL_HEIGHT_REQUEST: i32 = 45;
 
@@ -21,6 +23,8 @@ pub struct AuthUiInit<Client>
 where
     Client: Greetd,
 {
+    pub sys_util: SysUtil,
+
     pub users: Vec<SelectorOption>,
     pub initial_user: EntryOrDropDown,
 
@@ -34,8 +38,7 @@ pub struct AuthUi<Client>
 where
     Client: Greetd + 'static,
 {
-    selected_user: EntryOrDropDown,
-    selected_session: EntryOrDropDown,
+    sys_util: SysUtil,
 
     #[doc(hidden)]
     user_selector: Controller<Selector>,
@@ -98,6 +101,7 @@ where
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let AuthUiInit {
+            sys_util,
             users,
             initial_user,
             sessions,
@@ -115,7 +119,7 @@ where
             .launch(SelectorInit {
                 entry_placeholder: "System username".to_string(),
                 options: users.clone(),
-                initial_selection: initial_user.clone(),
+                initial_selection: initial_user,
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter a system username".to_string(),
             })
@@ -129,7 +133,7 @@ where
             .launch(SelectorInit {
                 entry_placeholder: "Session command".to_string(),
                 options: sessions.clone(),
-                initial_selection: initial_session.clone(),
+                initial_selection: initial_session,
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter session command".to_string(),
             })
@@ -154,16 +158,28 @@ where
             });
 
         let model = Self {
+            sys_util,
+
             user_selector,
-            selected_user: initial_user,
-
             session_selector,
-            selected_session: initial_session,
-
             auth_view,
         };
         let widgets = view_output!();
 
         ComponentParts { model, widgets }
+    }
+
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+        // TODO: impl the other variants
+        match message {
+            AuthUiMsg::UserChanged(_) => (),
+            AuthUiMsg::SessionChanged(entry) => self.auth_view.emit(AuthViewMsg::UpdateSession {
+                command: match entry {
+                    EntryOrDropDown::Entry(cmdline) => shlex::split(&cmdline),
+                    EntryOrDropDown::DropDown(id) => self.sys_util.get_sessions().get(&id).cloned(),
+                },
+            }),
+            AuthUiMsg::ShowError(error) => error!("{error}"), // TODO: Show an error
+        }
     }
 }
