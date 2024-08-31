@@ -10,6 +10,8 @@ pub struct SelectorInit {
     pub entry_placeholder: String,
     pub options: Vec<SelectorOption>,
     pub initial_selection: EntryOrDropDown,
+    /// Whether or not this selector should startup in a locked state
+    pub locked: bool,
 
     pub toggle_icon_name: String,
     pub toggle_tooltip: String,
@@ -30,7 +32,7 @@ pub enum EntryOrDropDown {
 #[derive(Debug, Clone)]
 pub struct Selector {
     selection: EntryOrDropDown,
-
+    locked: bool,
     last_entry: String,
     last_option_id: String,
 }
@@ -42,6 +44,16 @@ pub enum SelectorOutput {
 
 #[derive(Debug)]
 pub enum SelectorMsg {
+    /// External message.
+    ///
+    /// Locks this input, preventing user interactions and suppressing any events it may send.
+    Lock,
+
+    /// External message.
+    ///
+    /// Unlocks this input, making it interactive again.
+    Unlock,
+
     /// Internal message.
     ///
     /// Switches between the 2 input modes: [`DropDown`] and [`Entry`].
@@ -78,7 +90,13 @@ impl SimpleComponent for Selector {
 
                         // Note: Cannot `set_active_id` here, because the options are appended after `view_output!{}` in `init`
 
+                        #[watch]
+                        set_sensitive: !model.locked,
                         connect_changed[sender] => move |dropdown| {
+                            if !dropdown.is_sensitive() {
+                                return;
+                            }
+
                             sender.input(
                                 Self::Input::UpdateSelection(
                                     EntryOrDropDown::DropDown(dropdown.active_id().unwrap().to_string())
@@ -95,7 +113,13 @@ impl SimpleComponent for Selector {
                         set_text: model.last_entry.as_str(),
                         set_placeholder_text: Some(entry_placeholder.as_str()),
 
+                        #[watch]
+                        set_sensitive: !model.locked,
                         connect_changed[sender] => move |entry| {
+                            if !entry.is_sensitive() {
+                                return;
+                            }
+
                             sender.input(
                                 Self::Input::UpdateSelection(
                                     EntryOrDropDown::Entry(entry.text().to_string())
@@ -111,7 +135,16 @@ impl SimpleComponent for Selector {
                 set_active: toggle_state,
                 set_tooltip_text: Some(toggle_tooltip.as_str()),
 
-                connect_clicked => Self::Input::ToggleMode,
+
+                #[watch]
+                set_sensitive: !model.locked,
+                connect_clicked[sender] => move |toggle| {
+                    if !toggle.is_sensitive() {
+                        return;
+                    }
+
+                    sender.input(Self::Input::ToggleMode)
+                }
             },
         }
     }
@@ -124,6 +157,7 @@ impl SimpleComponent for Selector {
         let SelectorInit {
             options,
             initial_selection: selection,
+            locked,
             toggle_icon_name,
             toggle_tooltip,
             entry_placeholder,
@@ -136,6 +170,7 @@ impl SimpleComponent for Selector {
 
         let model = Self {
             selection,
+            locked,
 
             last_entry,
             last_option_id,
@@ -168,8 +203,10 @@ impl SimpleComponent for Selector {
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+        use SelectorMsg as I;
+
         match message {
-            SelectorMsg::ToggleMode => {
+            I::ToggleMode => {
                 let new = match &self.selection {
                     EntryOrDropDown::Entry(last) => {
                         self.last_entry = last.clone();
@@ -187,12 +224,15 @@ impl SimpleComponent for Selector {
                 )
             }
 
-            SelectorMsg::UpdateSelection(new) => {
+            I::UpdateSelection(new) => {
                 self.selection = new.clone();
                 sender.output(Self::Output::CurrentSelection(new)).expect(
                     "selector's controller must not be dropped because this is an input widget.",
                 )
             }
+
+            I::Lock => self.locked = true,
+            I::Unlock => self.locked = false,
         }
     }
 }

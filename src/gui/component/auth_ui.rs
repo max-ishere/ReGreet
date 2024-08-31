@@ -6,7 +6,7 @@ use tracing::error;
 
 use crate::greetd::Greetd;
 use crate::gui::component::auth_view::AuthViewInit;
-use crate::gui::component::{AuthViewOutput, SelectorInit, SelectorOutput};
+use crate::gui::component::{AuthViewOutput, SelectorInit, SelectorMsg, SelectorOutput};
 use crate::gui::templates::EntryLabel;
 use crate::sysutil::SysUtil;
 
@@ -57,6 +57,9 @@ pub enum AuthUiMsg {
     UserChanged(EntryOrDropDown),
     SessionChanged(EntryOrDropDown),
     ShowError(String),
+
+    LockUserSelectors,
+    UnlockUserSelectors,
 }
 
 #[relm4::component(pub)]
@@ -120,6 +123,10 @@ where
                 entry_placeholder: "System username".to_string(),
                 options: users.clone(),
                 initial_selection: initial_user,
+                locked: match greetd_state {
+                    GreetdState::NotCreated(_) => false,
+                    _ => true,
+                },
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter a system username".to_string(),
             })
@@ -134,6 +141,7 @@ where
                 entry_placeholder: "Session command".to_string(),
                 options: sessions.clone(),
                 initial_selection: initial_session,
+                locked: false,
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter session command".to_string(),
             })
@@ -152,9 +160,14 @@ where
                 env: Vec::new(),
             })
             .forward(sender.input_sender(), move |output| {
-                let AuthViewOutput::NotifyError(error) = output;
+                use AuthUiMsg as I;
+                use AuthViewOutput as O;
 
-                Self::Input::ShowError(error)
+                match output {
+                    O::NotifyError(error) => I::ShowError(error),
+                    O::LockUserSelectors => I::LockUserSelectors,
+                    O::UnlockUserSelectors => I::UnlockUserSelectors,
+                }
             });
 
         let model = Self {
@@ -169,17 +182,25 @@ where
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
-        // TODO: impl the other variants
+    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+        use AuthUiMsg as I;
         match message {
-            AuthUiMsg::UserChanged(_) => (),
-            AuthUiMsg::SessionChanged(entry) => self.auth_view.emit(AuthViewMsg::UpdateSession {
-                command: match entry {
+            I::UserChanged(entry) => self.auth_view.emit(AuthViewMsg::UpdateUser(match entry {
+                EntryOrDropDown::DropDown(username) => username,
+                EntryOrDropDown::Entry(username) => username,
+            })),
+
+            I::SessionChanged(entry) => {
+                self.auth_view.emit(AuthViewMsg::UpdateSession(match entry {
                     EntryOrDropDown::Entry(cmdline) => shlex::split(&cmdline),
                     EntryOrDropDown::DropDown(id) => self.sys_util.get_sessions().get(&id).cloned(),
-                },
-            }),
-            AuthUiMsg::ShowError(error) => error!("{error}"), // TODO: Show an error
+                }))
+            }
+
+            I::LockUserSelectors => self.user_selector.emit(SelectorMsg::Lock),
+            I::UnlockUserSelectors => self.user_selector.emit(SelectorMsg::Unlock),
+
+            I::ShowError(error) => error!("{error}"), // TODO: Show an error
         }
     }
 }
