@@ -52,8 +52,8 @@ pub enum GreetdState<Client>
 where
     Client: Greetd,
 {
-    /// In the UI, shows a single login button. When pressed, uses the username stored to start a session.
-    NotStarted(Client),
+    /// In the UI, shows a single login button. When pressed, uses the username stored to create a session.
+    NotCreated(Client),
 
     /// The session requires no further authentication and can be started. This looks like an info box with a login button.
     Startable(Client::StartableSession),
@@ -82,6 +82,18 @@ where
 pub enum AuthViewOutput {
     /// Tell the parent to show an error that occured during greetd IPC communication.
     NotifyError(String),
+
+    /// Emited whenever this UI demands it recieves no user switching requests because a user switch cannot be guaranteed
+    /// to be successful (a divertion of the user displayed in the UI and in the created session is forbidden). If the
+    /// user switch fails it may leave the UI in an inconsistent state (mitigated by a panic).
+    ///
+    /// # Panics
+    ///
+    /// To avoid panics, ensure all user switching UI is locked.
+    LockUserSelectors,
+
+    /// The widget is capable of handling user switching again.
+    UnlockUserSelectors,
 }
 
 #[derive(Derivative)]
@@ -89,8 +101,19 @@ pub enum AuthViewOutput {
 pub enum AuthViewMsg {
     /// External command
     ///
+    /// Sent by the user selector to change the user. This sets the username to be used when creating a session. If a user has to be switched,
+    /// the current session should be canceled first.
+    ///
+    /// # Panics
+    ///
+    /// Sending this request after [`AuthViewOutput::LockUserSelectors`] is sent will cause a panic in the widget. The request is safe to send
+    /// after [`AuthViewOutput::UnlockUserSelectors`] is sent. This component can be initialized into a state that prohibits user switching.
+    UpdateUser(String),
+
+    /// External command
+    ///
     /// Sent by the parent to update the session start params. Has no effect on the UI of this component.
-    UpdateSession { command: Option<Vec<String>> },
+    UpdateSession(Option<Vec<String>>),
 
     /// Internal message
     ///
@@ -208,7 +231,7 @@ where
                     }
                 }
 
-                GreetdState::NotStarted(_) => gtk::Box {
+                GreetdState::NotCreated(_) => gtk::Box {
                     set_halign: gtk::Align::End,
                     #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
                 }
@@ -271,10 +294,22 @@ where
             AuthViewMsg::Cancel => self.cancel_session(&sender).await,
             AuthViewMsg::AdvanceAuthentication => self.advance_authentication(&sender).await,
 
-            AuthViewMsg::UpdateSession { command } => {
+            AuthViewMsg::UpdateUser(username) => self.change_user(username).await,
+
+            AuthViewMsg::UpdateSession(command) => {
                 self.command = command;
             }
         };
+
+        if let GreetdState::NotCreated(_) = self.greetd_state {
+            sender
+                .output(AuthViewOutput::UnlockUserSelectors)
+                .expect("auth view should not have it's controller dropped");
+        } else {
+            sender
+                .output(AuthViewOutput::LockUserSelectors)
+                .expect("auth view should not have it's controller dropped");
+        }
     }
 }
 
@@ -312,7 +347,7 @@ where
 
         self.greetd_state = match greetd_state {
             S::Loading(old) => S::Loading(old),
-            S::NotStarted(client) => GreetdState::NotStarted(client),
+            S::NotCreated(client) => GreetdState::NotCreated(client),
 
             S::Startable(client) => report_error(try_cancel(client, S::Startable).await, sender),
 
@@ -334,7 +369,7 @@ where
         };
     }
 
-    pub async fn advance_authentication(&mut self, sender: &AsyncComponentSender<Self>) {
+    async fn advance_authentication(&mut self, sender: &AsyncComponentSender<Self>) {
         use GreetdState as S;
 
         let greetd_state = replace(
@@ -345,7 +380,7 @@ where
         let maybe_startable = match greetd_state {
             S::Loading(old) => S::Loading(old),
 
-            GreetdState::NotStarted(client) => report_error(
+            GreetdState::NotCreated(client) => report_error(
                 try_create_session(client, &self.username, || self.reset_question = true).await,
                 sender,
             ),
@@ -382,6 +417,17 @@ where
             sender,
         )
         .await;
+    }
+
+    async fn change_user(&mut self, username: String) {
+        use GreetdState as S;
+
+        match &self.greetd_state {
+            S::NotCreated(_) => self.username = username,
+            _user_cannot_be_switched_infallibly => {
+                panic!("The user cannot be switched in this Greetd IPC state.")
+            }
+        }
     }
 }
 
@@ -420,7 +466,7 @@ where
     };
 
     match res {
-        Ok(client) => Ok(GreetdState::NotStarted(client)),
+        Ok(client) => Ok(GreetdState::NotCreated(client)),
         Err((session, err)) => Err((variant(session), format!("{}", err))),
     }
 }
@@ -436,12 +482,12 @@ where
 {
     let res = match client.create_session(username).await {
         Ok(res) => res,
-        Err((client, err)) => return Err((GreetdState::NotStarted(client), format!("{}", err))),
+        Err((client, err)) => return Err((GreetdState::NotCreated(client), format!("{}", err))),
     };
 
     let session = match res {
         Ok(session) => session,
-        Err((client, err)) => return Err((GreetdState::NotStarted(client), format!("{}", err))),
+        Err((client, err)) => return Err((GreetdState::NotCreated(client), format!("{}", err))),
     };
 
     use CreateSessionResponse as R;
@@ -476,7 +522,7 @@ where
     };
 
     match res {
-        Ok(client) => Ok(GreetdState::NotStarted(client)),
+        Ok(client) => Ok(GreetdState::NotCreated(client)),
         Err((startable, err)) => Err((variant(startable), format!("{}", err))),
     }
 }

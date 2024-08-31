@@ -116,7 +116,7 @@ impl Greeter {
                 initial_user: initial_user.clone(),
                 sessions,
                 initial_session,
-                greetd_state: GreetdState::NotStarted(MockGreetd {}),
+                greetd_state: GreetdState::NotCreated(MockGreetd {}),
             })
             .detach();
 
