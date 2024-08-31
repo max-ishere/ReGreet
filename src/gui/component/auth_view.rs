@@ -39,7 +39,7 @@ where
     /// Username to use when creating a new session. When a different username is set by the parent widget, the current session is canceled.
     username: String,
     /// Command to use when starting a session. This is updated by the parent widget.
-    command: Vec<String>,
+    command: Option<Vec<String>>,
     /// Env to use when starting a session. This is updated by the parent widget.
     env: Vec<String>,
 
@@ -87,6 +87,11 @@ pub enum AuthViewOutput {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum AuthViewMsg {
+    /// External command
+    ///
+    /// Sent by the parent to update the session start params. Has no effect on the UI of this component.
+    UpdateSession { command: Option<Vec<String>> },
+
     /// Internal message
     ///
     /// Emited by the question auth inputs to update the response.
@@ -237,7 +242,7 @@ where
         let model = Self {
             greetd_state,
             username,
-            command,
+            command: Some(command),
             env,
 
             reset_question: false,
@@ -265,6 +270,10 @@ where
             }
             AuthViewMsg::Cancel => self.cancel_session(&sender).await,
             AuthViewMsg::AdvanceAuthentication => self.advance_authentication(&sender).await,
+
+            AuthViewMsg::UpdateSession { command } => {
+                self.command = command;
+            }
         };
     }
 }
@@ -366,7 +375,13 @@ where
             ),
         };
 
-        self.greetd_state = try_autostart(maybe_startable, &self.command, &self.env, sender).await;
+        self.greetd_state = try_autostart(
+            maybe_startable,
+            self.command.clone(),
+            self.env.clone(),
+            sender,
+        )
+        .await;
     }
 }
 
@@ -468,22 +483,26 @@ where
 
 async fn try_autostart<Client>(
     state: GreetdState<Client>,
-    command: &[String],
-    env: &[String],
+    command: Option<Vec<String>>,
+    env: Vec<String>,
     sender: &AsyncComponentSender<AuthView<Client>>,
 ) -> GreetdState<Client>
 where
     Client: Greetd,
 {
     if let GreetdState::Startable(startable) = state {
+        let Some(command) = command else {
+            sender
+                .output(AuthViewOutput::NotifyError(
+                    "Selected session cannot be executed because it is invalid".to_string(),
+                ))
+                .expect("auth view controller should not be dropped");
+
+            return GreetdState::Startable(startable);
+        };
+
         report_error(
-            try_start_session(
-                startable,
-                GreetdState::<Client>::Startable,
-                command.to_owned(),
-                env.to_owned(),
-            )
-            .await,
+            try_start_session(startable, GreetdState::<Client>::Startable, command, env).await,
             sender,
         )
     } else {
