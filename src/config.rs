@@ -9,8 +9,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::constants::{GREETING_MSG, POWEROFF_CMD, REBOOT_CMD};
-use crate::tomlutils::load_toml;
+use crate::{
+    constants::{GREETING_MSG, POWEROFF_CMD, REBOOT_CMD},
+    tomlutils::load_toml,
+};
 
 #[derive(Deserialize, Serialize)]
 pub struct AppearanceSettings {

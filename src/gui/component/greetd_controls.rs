@@ -2,15 +2,17 @@ use std::mem::{replace, take};
 
 use derivative::Derivative;
 use gtk4::prelude::*;
-use relm4::component::{AsyncComponentParts, SimpleAsyncComponent};
-use relm4::{prelude::*, AsyncComponentSender};
+use relm4::{
+    component::{AsyncComponentParts, SimpleAsyncComponent},
+    prelude::*,
+    AsyncComponentSender,
+};
 use tracing::{debug, error};
 
 use crate::greetd::{
     AuthInformative, AuthInformativeResponse, AuthQuestion, AuthQuestionResponse, AuthResponse,
     CancellableSession, CreateSessionResponse, Greetd, StartableSession,
 };
-use crate::gui::templates::LoginButton;
 
 /// Initializes the login controls of the greeter.
 pub struct GreetdControlsInit<Client>
@@ -21,7 +23,6 @@ where
     pub greetd_state: GreetdState<Client>,
     /// Specifies what username should be used when creating a session.
     /// This is stored in the model and when the username changes the previous session is canceled.
-    // TODO: Cancel the session when the username is changed.
     pub username: String,
     /// What command to execute when the session is started.
     pub command: Vec<String>,
@@ -46,7 +47,7 @@ where
     /// A bool to conditionally reset the question inputs.
     /// Use of tracker::track would not solve the issue because we want to perform a reset after an authentication has succeeded
     /// or when a session is created.
-    reset_question: bool,
+    reset_question_inputs_event: bool,
 }
 pub enum GreetdState<Client>
 where
@@ -131,6 +132,47 @@ pub enum GreetdControlsMsg {
     AdvanceAuthentication,
 }
 
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for AuthMessageLabel {
+    view! {
+        gtk::Label {
+            set_xalign: -1.0,
+        }
+    }
+}
+
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for LoginBox {
+    view! {
+        gtk::Box {
+            set_halign: gtk::Align::End,
+            set_spacing: 15,
+
+        }
+    }
+}
+
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for CancelButton {
+    view! {
+        gtk::Button {
+            set_label: "Cancel",
+        }
+    }
+}
+
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for LoginButton {
+    view! {
+        gtk::Button {
+            set_focusable: true,
+            set_label: "Login",
+            set_receives_default: true,
+            add_css_class: "suggested-action",
+        }
+    }
+}
+
 #[relm4::component(pub, async)]
 impl<Client> SimpleAsyncComponent for GreetdControls<Client>
 where
@@ -152,27 +194,38 @@ where
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
 
-                    gtk::InfoBar {
+                    gtk::Separator,
+
+                    append = &gtk::InfoBar {
                         set_show_close_button: false,
                         set_message_type: gtk::MessageType::Info,
 
-                        gtk::Label {
-                            set_text: "Click login to start the session.",
+                        #[template]
+                        AuthMessageLabel {
+                            set_text: "Session can be started.",
                         }
                     },
 
                     #[template]
                     append = &LoginBox {
                         #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
+                        #[template] LoginButton {
+                            #[watch]
+                            grab_focus: (),
+
+                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication,
+                        },
                     }
                 }
 
-                GreetdState::AuthQuestion{ session: question, .. } => gtk::Box {
+                GreetdState::AuthQuestion{ session: question, credential } => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
 
-                    gtk::Label {
+                    gtk::Separator,
+
+                    #[template]
+                    append = &AuthMessageLabel {
                         #[watch]
                         set_text: question.auth_question().prompt(),
                     },
@@ -182,19 +235,29 @@ where
                             #[watch]
                             set_placeholder_text: Some(prompt),
 
-                            #[track( model.reset_question )]
-                            set_text: "",
+                            #[track( model.reset_question_inputs_event )]
+                            set_text: credential,
+
+                            set_show_peek_icon: true,
+
+                            #[track( model.reset_question_inputs_event )]
+                            grab_focus: (),
 
                             connect_changed[sender] => move |this| sender.input(Self::Input::CredentialChanged(this.text().to_string())),
+                            connect_activate => Self::Input::AdvanceAuthentication,
                         }
                         AuthQuestion::Visible(prompt) => gtk::Entry {
                             #[watch]
                             set_placeholder_text: Some(prompt),
 
-                            #[track( model.reset_question )]
-                            set_text: "",
+                            #[track( model.reset_question_inputs_event )]
+                            set_text: credential,
+
+                            #[track( model.reset_question_inputs_event )]
+                            grab_focus: (),
 
                             connect_changed[sender] => move |this| sender.input(Self::Input::CredentialChanged(this.text().to_string())),
+                            connect_activate => Self::Input::AdvanceAuthentication,
                         }
                     },
 
@@ -209,7 +272,9 @@ where
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
 
-                    gtk::InfoBar {
+                    gtk::Separator,
+
+                    append = &gtk::InfoBar {
                         set_show_close_button: false,
 
                         #[watch]
@@ -218,7 +283,8 @@ where
                             AuthInformative::Error(_) => gtk::MessageType::Error,
                         },
 
-                        gtk::Label {
+                    #[template]
+                    AuthMessageLabel {
                             #[watch]
                             set_text: informative.auth_informative().prompt(),
                         }
@@ -227,25 +293,39 @@ where
                     #[template]
                     append = &LoginBox {
                         #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
-                    }
-                }
+                        #[template] LoginButton {
+                            #[watch]
+                            grab_focus: (),
 
-                GreetdState::NotCreated(_) => gtk::Box {
-                    set_halign: gtk::Align::End,
-                    #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
+                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication,
+                        },
+                    }
                 }
 
                 GreetdState::Loading(message) => gtk::InfoBar {
                     set_show_close_button: false,
                     set_message_type: gtk::MessageType::Info,
 
-                    gtk::Label {
+                    gtk::Separator,
+
+                    #[template]
+                    AuthMessageLabel {
                         #[watch]
                         set_text: message.as_str(),
                         set_valign: gtk::Align::Start,
                     }
                 }
+
+                GreetdState::NotCreated(_) => gtk::Box {
+                    set_halign: gtk::Align::End,
+                    #[template] LoginButton {
+                        #[watch]
+                        grab_focus: (),
+
+                        connect_clicked => GreetdControlsMsg::AdvanceAuthentication,
+                     },
+                }
+
             },
         }
     }
@@ -262,13 +342,18 @@ where
             env,
         } = init;
 
+        let reset_question_inputs_event = match greetd_state {
+            GreetdState::AuthQuestion { .. } => true,
+            _ => false,
+        };
+
         let model = Self {
             greetd_state,
             username,
             command: Some(command),
             env,
 
-            reset_question: false,
+            reset_question_inputs_event,
         };
         let widgets = view_output!();
 
@@ -280,7 +365,7 @@ where
     }
 
     async fn update(&mut self, message: Self::Input, sender: AsyncComponentSender<Self>) {
-        self.reset_question = false;
+        self.reset_question_inputs_event = false;
 
         match message {
             GreetdControlsMsg::CredentialChanged(new_cred) => {
@@ -304,31 +389,11 @@ where
         if let GreetdState::NotCreated(_) = self.greetd_state {
             sender
                 .output(GreetdControlsOutput::UnlockUserSelectors)
-                .expect("auth view should not have it's controller dropped");
+                .unwrap();
         } else {
             sender
                 .output(GreetdControlsOutput::LockUserSelectors)
-                .expect("auth view should not have it's controller dropped");
-        }
-    }
-}
-
-#[relm4::widget_template(pub)]
-impl WidgetTemplate for LoginBox {
-    view! {
-        gtk::Box {
-            set_halign: gtk::Align::End,
-            set_spacing: 15,
-
-        }
-    }
-}
-
-#[relm4::widget_template(pub)]
-impl WidgetTemplate for CancelButton {
-    view! {
-        gtk::Button {
-            set_label: "Cancel",
+                .unwrap();
         }
     }
 }
@@ -381,7 +446,10 @@ where
             S::Loading(old) => S::Loading(old),
 
             GreetdState::NotCreated(client) => report_error(
-                try_create_session(client, &self.username, || self.reset_question = true).await,
+                try_create_session(client, &self.username, || {
+                    self.reset_question_inputs_event = true
+                })
+                .await,
                 sender,
             ),
             GreetdState::Startable(startable) => GreetdState::Startable(startable),
@@ -396,14 +464,14 @@ where
                         credential: credential.clone(),
                     },
                     Some(credential.clone()),
-                    || self.reset_question = true,
+                    || self.reset_question_inputs_event = true,
                 )
                 .await,
                 sender,
             ),
             GreetdState::AuthInformative(informative) => report_error(
                 try_auth(informative, S::AuthInformative, None, || {
-                    self.reset_question = true
+                    self.reset_question_inputs_event = true
                 })
                 .await,
                 sender,

@@ -74,7 +74,6 @@ where
             last_user_session_cache,
             greetd_state,
         } = init;
-        // TODO: Do all the loading in main, because this is UI init code, not file IO code.
 
         let auth_ui = AuthUi::builder()
             .launch(AuthUiInit {
