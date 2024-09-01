@@ -22,7 +22,7 @@ use serde::{
 use tracing::warn;
 
 /// Wrapper to enable (de)serialization
-pub(super) struct LruCache<K, V, S = DefaultHasher>(OrigLruCache<K, V, S>);
+pub(super) struct LruCache<K, V, S = DefaultHasher>(pub OrigLruCache<K, V, S>);
 
 impl<K: Hash + Eq, V> LruCache<K, V> {
     pub(super) fn new(capacity: usize) -> Self {
