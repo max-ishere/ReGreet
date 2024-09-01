@@ -143,10 +143,7 @@ where
                 entry_placeholder: "System username".to_string(),
                 options: user_options,
                 initial_selection: user_entry,
-                locked: match greetd_state {
-                    GreetdState::NotCreated(_) => false,
-                    _ => true,
-                },
+                locked: !matches!(greetd_state, GreetdState::NotCreated(_)),
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter a system username".to_string(),
             })

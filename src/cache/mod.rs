@@ -5,7 +5,6 @@
 //! Utility for caching info between logins
 
 use std::path::Path;
-use std::{collections::HashMap, num::NonZeroUsize};
 
 use relm4::spawn_blocking;
 use serde::{Deserialize, Serialize};
@@ -52,7 +51,7 @@ impl Cache {
     ///
     /// 1. It will only be run during the shutdown process.
     /// 2. Serde calls can take a long time before this async fn yields, so self would have to be moved into
-    ///   [`spawn_blocking`], and whether or not a clone of &self is cost effective is up to the caller.
+    ///    [`spawn_blocking`], and whether or not a clone of &self is cost effective is up to the caller.
     pub async fn save<P>(self, path: P) -> Result<(), TomlWriteError>
     where
         P: AsRef<Path>,
@@ -76,7 +75,7 @@ impl Cache {
 
     pub fn last_user(&self) -> Option<&str> {
         self.user_to_last_sess
-            .get(0)
+            .first()
             .map(|(username, _)| username.as_str())
     }
 }
