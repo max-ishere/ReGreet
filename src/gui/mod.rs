@@ -5,4 +5,3 @@
 //! The main GUI for the greeter
 
 pub mod component;
-mod templates;

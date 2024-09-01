@@ -9,12 +9,9 @@ use tracing::error;
 use crate::greetd::Greetd;
 use crate::gui::component::greetd_controls::GreetdControlsInit;
 use crate::gui::component::{GreetdControlsOutput, SelectorInit, SelectorMsg, SelectorOutput};
-use crate::gui::templates::EntryLabel;
 
 use super::greetd_controls::{GreetdControls, GreetdState};
 use super::{EntryOrDropDown, GreetdControlsMsg, Selector, SelectorOption};
-
-const LABEL_HEIGHT_REQUEST: i32 = 45;
 
 const USER_ROW: i32 = 0;
 const SESSION_ROW: i32 = 1;
@@ -77,20 +74,17 @@ where
             set_margin_all: 15,
 
             #[template]
-            attach[0, USER_ROW, 1, 1] =  &EntryLabel {
-                set_label: "User:",
-                set_height_request: LABEL_HEIGHT_REQUEST,
+            attach[0, USER_ROW, 1, 1] =  &SelectorLabel {
+                set_label: "User",
             },
 
             attach[1, USER_ROW, 1, 1] = model.user_selector.widget(),
 
             #[template]
-            attach[0, SESSION_ROW, 1, 1] = &EntryLabel {
-                set_label: "Session:",
-                set_height_request: LABEL_HEIGHT_REQUEST,
+            attach[0, SESSION_ROW, 1, 1] = &SelectorLabel {
+                set_label: "Session",
             },
 
-            // TODO: Change the session when the user is changed.
             attach[1, SESSION_ROW, 1, 1] = model.session_selector.widget(),
 
             attach[0, AUTH_ROW, 2, 1] = model.auth_view.widget(),
@@ -245,6 +239,15 @@ where
             I::UnlockUserSelectors => self.user_selector.emit(SelectorMsg::Unlock),
 
             I::ShowError(error) => error!("{error}"), // TODO: Show an error
+        }
+    }
+}
+
+#[relm4::widget_template(pub)]
+impl WidgetTemplate for SelectorLabel {
+    view! {
+        gtk::Label {
+            set_xalign: 1.0,
         }
     }
 }

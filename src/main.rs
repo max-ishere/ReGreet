@@ -9,7 +9,7 @@ mod error;
 mod greetd;
 mod gui;
 mod sysutil;
-mod tomlutils;
+pub mod tomlutils;
 
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Result as IoResult, Write};
@@ -126,7 +126,10 @@ fn main() {
         sessions,
         initial_user,
         last_user_session_cache,
-        greetd_state: GreetdState::NotCreated(MockGreetd {}),
+        greetd_state: GreetdState::AuthQuestion {
+            session: MockGreetd {},
+            credential: String::new(),
+        },
     });
 }
 
