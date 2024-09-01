@@ -4,7 +4,7 @@ use derivative::Derivative;
 use gtk4::prelude::*;
 use relm4::component::{AsyncComponentParts, SimpleAsyncComponent};
 use relm4::{prelude::*, AsyncComponentSender};
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::greetd::{
     AuthInformative, AuthInformativeResponse, AuthQuestion, AuthQuestionResponse, AuthResponse,
@@ -13,7 +13,7 @@ use crate::greetd::{
 use crate::gui::templates::LoginButton;
 
 /// Initializes the login controls of the greeter.
-pub struct AuthViewInit<Client>
+pub struct GreetdControlsInit<Client>
 where
     Client: Greetd + 'static,
 {
@@ -30,7 +30,7 @@ where
 }
 
 /// Shows greetd session controls.
-pub struct AuthView<Client>
+pub struct GreetdControls<Client>
 where
     Client: Greetd + 'static,
 {
@@ -79,7 +79,7 @@ where
 }
 
 #[derive(Debug)]
-pub enum AuthViewOutput {
+pub enum GreetdControlsOutput {
     /// Tell the parent to show an error that occured during greetd IPC communication.
     NotifyError(String),
 
@@ -98,7 +98,7 @@ pub enum AuthViewOutput {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub enum AuthViewMsg {
+pub enum GreetdControlsMsg {
     /// External command
     ///
     /// Sent by the user selector to change the user. This sets the username to be used when creating a session. If a user has to be switched,
@@ -132,13 +132,13 @@ pub enum AuthViewMsg {
 }
 
 #[relm4::component(pub, async)]
-impl<Client> SimpleAsyncComponent for AuthView<Client>
+impl<Client> SimpleAsyncComponent for GreetdControls<Client>
 where
     Client: Greetd + 'static,
 {
-    type Init = AuthViewInit<Client>;
-    type Input = AuthViewMsg;
-    type Output = AuthViewOutput;
+    type Init = GreetdControlsInit<Client>;
+    type Input = GreetdControlsMsg;
+    type Output = GreetdControlsOutput;
 
     view! {
         gtk::Box {
@@ -163,8 +163,8 @@ where
 
                     #[template]
                     append = &LoginBox {
-                        #[template] CancelButton { connect_clicked => AuthViewMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
+                        #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
+                        #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
                     }
                 }
 
@@ -200,8 +200,8 @@ where
 
                     #[template]
                     append = &LoginBox {
-                        #[template] CancelButton { connect_clicked => AuthViewMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
+                        #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
+                        #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
                     }
                 }
 
@@ -226,14 +226,14 @@ where
 
                     #[template]
                     append = &LoginBox {
-                        #[template] CancelButton { connect_clicked => AuthViewMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
+                        #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
+                        #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
                     }
                 }
 
                 GreetdState::NotCreated(_) => gtk::Box {
                     set_halign: gtk::Align::End,
-                    #[template] LoginButton { connect_clicked => AuthViewMsg::AdvanceAuthentication },
+                    #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
                 }
 
                 GreetdState::Loading(message) => gtk::InfoBar {
@@ -255,7 +255,7 @@ where
         root: Self::Root,
         sender: AsyncComponentSender<Self>,
     ) -> AsyncComponentParts<Self> {
-        let AuthViewInit {
+        let GreetdControlsInit {
             greetd_state,
             username,
             command,
@@ -283,7 +283,7 @@ where
         self.reset_question = false;
 
         match message {
-            AuthViewMsg::CredentialChanged(new_cred) => {
+            GreetdControlsMsg::CredentialChanged(new_cred) => {
                 if let GreetdState::AuthQuestion {
                     ref mut credential, ..
                 } = self.greetd_state
@@ -291,23 +291,23 @@ where
                     *credential = new_cred;
                 }
             }
-            AuthViewMsg::Cancel => self.cancel_session(&sender).await,
-            AuthViewMsg::AdvanceAuthentication => self.advance_authentication(&sender).await,
+            GreetdControlsMsg::Cancel => self.cancel_session(&sender).await,
+            GreetdControlsMsg::AdvanceAuthentication => self.advance_authentication(&sender).await,
 
-            AuthViewMsg::UpdateUser(username) => self.change_user(username).await,
+            GreetdControlsMsg::UpdateUser(username) => self.change_user(username).await,
 
-            AuthViewMsg::UpdateSession(command) => {
+            GreetdControlsMsg::UpdateSession(command) => {
                 self.command = command;
             }
         };
 
         if let GreetdState::NotCreated(_) = self.greetd_state {
             sender
-                .output(AuthViewOutput::UnlockUserSelectors)
+                .output(GreetdControlsOutput::UnlockUserSelectors)
                 .expect("auth view should not have it's controller dropped");
         } else {
             sender
-                .output(AuthViewOutput::LockUserSelectors)
+                .output(GreetdControlsOutput::LockUserSelectors)
                 .expect("auth view should not have it's controller dropped");
         }
     }
@@ -333,7 +333,7 @@ impl WidgetTemplate for CancelButton {
     }
 }
 
-impl<Client> AuthView<Client>
+impl<Client> GreetdControls<Client>
 where
     Client: Greetd,
 {
@@ -433,7 +433,7 @@ where
 
 fn report_error<Client>(
     res: Result<GreetdState<Client>, (GreetdState<Client>, String)>,
-    sender: &AsyncComponentSender<AuthView<Client>>,
+    sender: &AsyncComponentSender<GreetdControls<Client>>,
 ) -> GreetdState<Client>
 where
     Client: Greetd,
@@ -443,7 +443,7 @@ where
         Err((state, err)) => {
             error!("Greetd error: {err}");
             sender
-                .output(AuthViewOutput::NotifyError(err))
+                .output(GreetdControlsOutput::NotifyError(err))
                 .expect("auth view controller should not be dropped");
             state
         }
@@ -460,6 +460,8 @@ async fn try_cancel<Session>(
 where
     Session: CancellableSession,
 {
+    debug!("Canceling session");
+
     let res = match session.cancel_session().await {
         Ok(res) => res,
         Err((session, err)) => return Err((variant(session), format!("{}", err))),
@@ -480,6 +482,8 @@ async fn try_create_session<Client>(
 where
     Client: Greetd,
 {
+    debug!("Creating session for user: {username}");
+
     let res = match client.create_session(username).await {
         Ok(res) => res,
         Err((client, err)) => return Err((GreetdState::NotCreated(client), format!("{}", err))),
@@ -516,6 +520,8 @@ async fn try_start_session<Startable>(
 where
     Startable: StartableSession,
 {
+    debug!("Starting session: cmd: {command:?} env: {env:?}");
+
     let res = match session.start_session(command, env).await {
         Ok(res) => res,
         Err((startable, err)) => return Err((variant(startable), format!("{}", err))),
@@ -531,7 +537,7 @@ async fn try_autostart<Client>(
     state: GreetdState<Client>,
     command: Option<Vec<String>>,
     env: Vec<String>,
-    sender: &AsyncComponentSender<AuthView<Client>>,
+    sender: &AsyncComponentSender<GreetdControls<Client>>,
 ) -> GreetdState<Client>
 where
     Client: Greetd,
@@ -539,7 +545,7 @@ where
     if let GreetdState::Startable(startable) = state {
         let Some(command) = command else {
             sender
-                .output(AuthViewOutput::NotifyError(
+                .output(GreetdControlsOutput::NotifyError(
                     "Selected session cannot be executed because it is invalid".to_string(),
                 ))
                 .expect("auth view controller should not be dropped");

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use derivative::Derivative;
 use gtk4::prelude::*;
 use relm4::component::{AsyncComponent as _, AsyncComponentController as _, AsyncController};
@@ -5,13 +7,12 @@ use relm4::prelude::*;
 use tracing::error;
 
 use crate::greetd::Greetd;
-use crate::gui::component::auth_view::AuthViewInit;
-use crate::gui::component::{AuthViewOutput, SelectorInit, SelectorMsg, SelectorOutput};
+use crate::gui::component::greetd_controls::GreetdControlsInit;
+use crate::gui::component::{GreetdControlsOutput, SelectorInit, SelectorMsg, SelectorOutput};
 use crate::gui::templates::EntryLabel;
-use crate::sysutil::SysUtil;
 
-use super::auth_view::{AuthView, GreetdState};
-use super::{AuthViewMsg, EntryOrDropDown, Selector, SelectorOption};
+use super::greetd_controls::{GreetdControls, GreetdState};
+use super::{EntryOrDropDown, GreetdControlsMsg, Selector, SelectorOption};
 
 const LABEL_HEIGHT_REQUEST: i32 = 45;
 
@@ -23,13 +24,11 @@ pub struct AuthUiInit<Client>
 where
     Client: Greetd,
 {
-    pub sys_util: SysUtil,
+    pub initial_user: String,
+    pub users: HashMap<String, String>,
+    pub sessions: HashMap<String, Vec<String>>,
 
-    pub users: Vec<SelectorOption>,
-    pub initial_user: EntryOrDropDown,
-
-    pub sessions: Vec<SelectorOption>,
-    pub initial_session: EntryOrDropDown,
+    pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
 
     pub greetd_state: GreetdState<Client>,
 }
@@ -38,14 +37,14 @@ pub struct AuthUi<Client>
 where
     Client: Greetd + 'static,
 {
-    sys_util: SysUtil,
+    last_user_session_cache: HashMap<String, EntryOrDropDown>,
 
     #[doc(hidden)]
     user_selector: Controller<Selector>,
     #[doc(hidden)]
     session_selector: Controller<Selector>,
     #[doc(hidden)]
-    auth_view: AsyncController<AuthView<Client>>,
+    auth_view: AsyncController<GreetdControls<Client>>,
 }
 
 #[derive(Debug)]
@@ -55,7 +54,7 @@ pub enum AuthUiOutput {}
 #[derivative(Debug)]
 pub enum AuthUiMsg {
     UserChanged(EntryOrDropDown),
-    SessionChanged(EntryOrDropDown),
+    SessionChanged(Option<Vec<String>>),
     ShowError(String),
 
     LockUserSelectors,
@@ -104,25 +103,52 @@ where
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let AuthUiInit {
-            sys_util,
+            sessions,
             users,
             initial_user,
-            sessions,
-            initial_session,
+
+            last_user_session_cache,
+
             greetd_state,
         } = init;
 
-        let username = match &initial_user {
-            EntryOrDropDown::Entry(username) => username,
-            EntryOrDropDown::DropDown(username) => username,
-        }
-        .to_string();
+        let initial_session = last_user_session_cache
+            .get(&initial_user)
+            .and_then(|entry| {
+                if let EntryOrDropDown::DropDown(id) = entry {
+                    sessions.contains_key(id).then_some(entry)
+                } else {
+                    Some(entry)
+                }
+            })
+            .cloned()
+            .unwrap_or(
+                sessions
+                    .keys()
+                    .next()
+                    .map(|id| EntryOrDropDown::DropDown(id.clone()))
+                    .unwrap_or_else(|| EntryOrDropDown::Entry(String::new())),
+            );
+
+        let user_entry = if users.contains_key(&initial_user) {
+            EntryOrDropDown::DropDown(initial_user.clone())
+        } else {
+            EntryOrDropDown::Entry(initial_user.clone())
+        };
+
+        let user_options = users
+            .into_iter()
+            .map(|(system, display)| SelectorOption {
+                id: system,
+                text: display,
+            })
+            .collect();
 
         let user_selector = Selector::builder()
             .launch(SelectorInit {
                 entry_placeholder: "System username".to_string(),
-                options: users.clone(),
-                initial_selection: initial_user,
+                options: user_options,
+                initial_selection: user_entry,
                 locked: match greetd_state {
                     GreetdState::NotCreated(_) => false,
                     _ => true,
@@ -139,29 +165,39 @@ where
         let session_selector = Selector::builder()
             .launch(SelectorInit {
                 entry_placeholder: "Session command".to_string(),
-                options: sessions.clone(),
+                options: sessions
+                    .keys()
+                    .map(|name| SelectorOption {
+                        id: name.clone(),
+                        text: name.clone(),
+                    })
+                    .collect(),
                 initial_selection: initial_session,
                 locked: false,
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter session command".to_string(),
             })
             .forward(sender.input_sender(), move |output| {
-                let SelectorOutput::CurrentSelection(selection) = output;
+                let SelectorOutput::CurrentSelection(entry) = output;
+                let cmdline = match entry {
+                    EntryOrDropDown::Entry(cmdline) => shlex::split(&cmdline),
+                    EntryOrDropDown::DropDown(id) => sessions.get(&id).cloned(),
+                };
 
-                Self::Input::SessionChanged(selection)
+                Self::Input::SessionChanged(cmdline)
             });
 
-        let auth_view = AuthView::builder()
-            .launch(AuthViewInit {
+        let auth_view = GreetdControls::builder()
+            .launch(GreetdControlsInit {
                 greetd_state,
-                username: username,
+                username: initial_user,
                 // TODO: Use real command and vec.
                 command: Vec::new(),
                 env: Vec::new(),
             })
             .forward(sender.input_sender(), move |output| {
                 use AuthUiMsg as I;
-                use AuthViewOutput as O;
+                use GreetdControlsOutput as O;
 
                 match output {
                     O::NotifyError(error) => I::ShowError(error),
@@ -171,7 +207,7 @@ where
             });
 
         let model = Self {
-            sys_util,
+            last_user_session_cache,
 
             user_selector,
             session_selector,
@@ -185,16 +221,24 @@ where
     fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
         use AuthUiMsg as I;
         match message {
-            I::UserChanged(entry) => self.auth_view.emit(AuthViewMsg::UpdateUser(match entry {
-                EntryOrDropDown::DropDown(username) => username,
-                EntryOrDropDown::Entry(username) => username,
-            })),
+            I::UserChanged(entry) => {
+                let username = match entry {
+                    EntryOrDropDown::DropDown(username) => username,
+                    EntryOrDropDown::Entry(username) => username,
+                };
+                self.auth_view
+                    .emit(GreetdControlsMsg::UpdateUser(username.clone()));
+
+                let Some(last_session) = self.last_user_session_cache.get(&username) else {
+                    return;
+                };
+
+                self.session_selector
+                    .emit(SelectorMsg::Set(last_session.clone()));
+            }
 
             I::SessionChanged(entry) => {
-                self.auth_view.emit(AuthViewMsg::UpdateSession(match entry {
-                    EntryOrDropDown::Entry(cmdline) => shlex::split(&cmdline),
-                    EntryOrDropDown::DropDown(id) => self.sys_util.get_sessions().get(&id).cloned(),
-                }))
+                self.auth_view.emit(GreetdControlsMsg::UpdateSession(entry))
             }
 
             I::LockUserSelectors => self.user_selector.emit(SelectorMsg::Lock),

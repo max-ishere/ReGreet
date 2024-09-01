@@ -4,10 +4,5 @@
 
 //! The main GUI for the greeter
 
-mod component;
-mod messages;
-mod model;
+pub mod component;
 mod templates;
-
-pub use component::GreeterInit;
-pub use model::Greeter;

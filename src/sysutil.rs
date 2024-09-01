@@ -36,11 +36,11 @@ type SessionMap = HashMap<String, Vec<String>>;
 /// Stores info of all regular users and sessions
 pub struct SysUtil {
     /// Maps a user's full name to their system username
-    users: UserMap,
+    pub users: UserMap,
     /// Maps a system username to their shell
-    shells: ShellMap,
+    pub shells: ShellMap,
     /// Maps a session's full name to its command
-    sessions: SessionMap,
+    pub sessions: SessionMap,
 }
 
 impl SysUtil {

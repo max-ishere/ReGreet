@@ -4,6 +4,8 @@
 
 //! Stores constants that can be configured at compile time
 
+use std::num::NonZeroUsize;
+
 use const_format::concatcp;
 
 /// Get an environment variable during compile time, else return a default.
@@ -35,6 +37,8 @@ pub const CSS_PATH: &str = concatcp!(GREETD_CONFIG_DIR, "/", GREETER_NAME, ".css
 const CACHE_DIR: &str = env_or!("CACHE_DIR", concatcp!("/var/cache/", GREETER_NAME));
 /// Path to the cache file
 pub const CACHE_PATH: &str = concatcp!(CACHE_DIR, "/cache.toml");
+/// Default limit of entries in the user_session_cache.
+pub const CACHE_USER_SESSION_LIMIT: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(100) };
 
 /// The directory for system log files
 const LOG_DIR: &str = env_or!("LOG_DIR", concatcp!("/var/log/", GREETER_NAME));

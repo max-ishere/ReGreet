@@ -33,6 +33,8 @@ pub enum EntryOrDropDown {
 pub struct Selector {
     selection: EntryOrDropDown,
     locked: bool,
+    update_view_event: bool,
+
     last_entry: String,
     last_option_id: String,
 }
@@ -53,6 +55,11 @@ pub enum SelectorMsg {
     ///
     /// Unlocks this input, making it interactive again.
     Unlock,
+
+    /// External message.
+    ///
+    /// Forces the UI to reflect this state.
+    Set(EntryOrDropDown),
 
     /// Internal message.
     ///
@@ -83,12 +90,13 @@ impl SimpleComponent for Selector {
             #[transition = "SlideLeftRight"]
             append = match &model.selection {
 
-                EntryOrDropDown::DropDown(_) => {
+                EntryOrDropDown::DropDown(active_id) => {
                     #[name = "combo_box"]
                     gtk::ComboBoxText {
                         set_hexpand: true,
 
-                        // Note: Cannot `set_active_id` here, because the options are appended after `view_output!{}` in `init`
+                        #[track( model.dropdown_changed() )]
+                        set_active_id: Some(active_id),
 
                         #[watch]
                         set_sensitive: !model.locked,
@@ -106,11 +114,12 @@ impl SimpleComponent for Selector {
                     }
                 }
 
-                EntryOrDropDown::Entry(_) => {
+                EntryOrDropDown::Entry(text) => {
                     gtk::Entry {
                         set_hexpand: true,
                         // Note: not `#[watch] model.selection.text` because `set_text()` places the cursor at char 0.
-                        set_text: model.last_entry.as_str(),
+                        #[track( model.entry_changed() )]
+                        set_text: text,
                         set_placeholder_text: Some(entry_placeholder.as_str()),
 
                         #[watch]
@@ -131,10 +140,12 @@ impl SimpleComponent for Selector {
             },
 
             append = &gtk::ToggleButton {
-                set_icon_name: toggle_icon_name.as_str(),
-                set_active: toggle_state,
                 set_tooltip_text: Some(toggle_tooltip.as_str()),
+                set_icon_name: toggle_icon_name.as_str(),
 
+                #[track( self.update_view_event )]
+                #[block_signal(clicked)]
+                set_active: model.toggle_state(),
 
                 #[watch]
                 set_sensitive: !model.locked,
@@ -144,7 +155,7 @@ impl SimpleComponent for Selector {
                     }
 
                     sender.input(Self::Input::ToggleMode)
-                }
+                } @clicked,
             },
         }
     }
@@ -154,6 +165,7 @@ impl SimpleComponent for Selector {
         root: &Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        // TODO: If options is empty, force entry mode and lock the toggle button. Effectively force manual input
         let SelectorInit {
             options,
             initial_selection: selection,
@@ -163,14 +175,15 @@ impl SimpleComponent for Selector {
             entry_placeholder,
         } = init;
 
-        let (last_entry, last_option_id, toggle_state) = match &selection {
-            EntryOrDropDown::Entry(entry) => (entry.clone(), options[0].id.clone(), true),
-            EntryOrDropDown::DropDown(id) => (String::new(), id.clone(), false),
+        let (last_entry, last_option_id) = match &selection {
+            EntryOrDropDown::Entry(entry) => (entry.clone(), options[0].id.clone()),
+            EntryOrDropDown::DropDown(id) => (String::new(), id.clone()),
         };
 
         let model = Self {
             selection,
             locked,
+            update_view_event: false,
 
             last_entry,
             last_option_id,
@@ -204,6 +217,7 @@ impl SimpleComponent for Selector {
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         use SelectorMsg as I;
+        self.update_view_event = false;
 
         match message {
             I::ToggleMode => {
@@ -233,6 +247,46 @@ impl SimpleComponent for Selector {
 
             I::Lock => self.locked = true,
             I::Unlock => self.locked = false,
+            I::Set(selection) => {
+                self.update_view_event = true;
+                match &self.selection {
+                    EntryOrDropDown::Entry(last) => self.last_entry = last.clone(),
+                    EntryOrDropDown::DropDown(last) => self.last_option_id = last.clone(),
+                }
+
+                self.selection = selection;
+
+                sender
+                    .output(SelectorOutput::CurrentSelection(self.selection.clone()))
+                    .expect("Cannot update the parent's selection triggered by a set signal");
+            }
+        }
+    }
+}
+
+impl Selector {
+    fn dropdown_changed(&self) -> bool {
+        self.update_view_event
+            && if let EntryOrDropDown::DropDown(_) = self.selection {
+                true
+            } else {
+                false
+            }
+    }
+
+    fn entry_changed(&self) -> bool {
+        self.update_view_event
+            && if let EntryOrDropDown::Entry(_) = self.selection {
+                true
+            } else {
+                false
+            }
+    }
+
+    fn toggle_state(&self) -> bool {
+        match self.selection {
+            EntryOrDropDown::Entry(_) => true,
+            EntryOrDropDown::DropDown(_) => false,
         }
     }
 }
