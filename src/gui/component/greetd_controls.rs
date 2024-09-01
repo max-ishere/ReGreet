@@ -342,10 +342,7 @@ where
             env,
         } = init;
 
-        let reset_question_inputs_event = match greetd_state {
-            GreetdState::AuthQuestion { .. } => true,
-            _ => false,
-        };
+        let reset_question_inputs_event = matches!(greetd_state, GreetdState::AuthQuestion { .. });
 
         let model = Self {
             greetd_state,

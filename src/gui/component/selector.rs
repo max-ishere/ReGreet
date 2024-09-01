@@ -266,21 +266,11 @@ impl SimpleComponent for Selector {
 
 impl Selector {
     fn dropdown_changed(&self) -> bool {
-        self.update_view_event
-            && if let EntryOrDropDown::DropDown(_) = self.selection {
-                true
-            } else {
-                false
-            }
+        self.update_view_event && matches!(self.selection, EntryOrDropDown::DropDown(_))
     }
 
     fn entry_changed(&self) -> bool {
-        self.update_view_event
-            && if let EntryOrDropDown::Entry(_) = self.selection {
-                true
-            } else {
-                false
-            }
+        self.update_view_event && matches!(self.selection, EntryOrDropDown::Entry(_))
     }
 
     fn toggle_state(&self) -> bool {

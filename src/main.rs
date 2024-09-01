@@ -98,13 +98,7 @@ fn main() {
     let initial_user = cache
         .last_user()
         .and_then(|user| users.contains_key(user).then_some(user.to_string()))
-        .unwrap_or_else(|| {
-            users
-                .keys()
-                .next()
-                .map(|user| user.clone())
-                .unwrap_or_default()
-        });
+        .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default());
 
     let last_user_session_cache = cache
         .user_to_last_sess
@@ -170,13 +164,10 @@ fn init_logging(log_path: &Path, log_level: &LogLevel, stdout: bool) -> Vec<Work
         LogLevel::Trace => LevelFilter::TRACE,
     };
 
-    // Load the timer before spawning threads, otherwise getting the local time offset will fail.
     let timer = OffsetTime::local_rfc_3339().expect("Couldn't get local time offset");
 
-    // Set up the logger.
     let builder = tracing_subscriber::fmt()
         .with_max_level(filter)
-        // The timer could be reused later.
         .with_timer(timer.clone());
 
     // Log in a separate non-blocking thread, then return the guard (otherise the non-blocking

@@ -55,7 +55,7 @@ pub enum BgFit {
 
 /// Struct for info about the background image
 #[derive(Default, Deserialize, Serialize)]
-struct Background {
+pub struct Background {
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -96,44 +96,19 @@ fn default_greeting_msg() -> String {
 #[derive(Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
-    appearance: AppearanceSettings,
+    pub appearance: AppearanceSettings,
     #[serde(default)]
-    env: HashMap<String, String>,
+    pub env: HashMap<String, String>,
     #[serde(default)]
-    background: Background,
+    pub background: Background,
     #[serde(default, rename = "GTK")]
-    gtk: Option<GtkSettings>,
+    pub gtk: Option<GtkSettings>,
     #[serde(default)]
-    commands: SystemCommands,
+    pub commands: SystemCommands,
 }
 
 impl Config {
     pub fn new(path: &Path) -> Self {
         load_toml(path)
-    }
-
-    pub fn get_env(&self) -> &HashMap<String, String> {
-        &self.env
-    }
-
-    pub fn get_background(&self) -> &Option<String> {
-        &self.background.path
-    }
-
-    #[cfg(feature = "gtk4_8")]
-    pub fn get_background_fit(&self) -> &BgFit {
-        &self.background.fit
-    }
-
-    pub fn get_gtk_settings(&self) -> &Option<GtkSettings> {
-        &self.gtk
-    }
-
-    pub fn get_sys_commands(&self) -> &SystemCommands {
-        &self.commands
-    }
-
-    pub fn get_default_message(&self) -> String {
-        self.appearance.greeting_msg.clone()
     }
 }

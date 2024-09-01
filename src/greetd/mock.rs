@@ -39,7 +39,7 @@ impl CancellableSession for MockGreetd {
 impl AuthResponse for MockGreetd {
     type Client = Self;
 
-    fn message<'a>(&'a self) -> AuthMessage<'a> {
+    fn message(&self) -> AuthMessage<'_> {
         AuthMessage::Secret("Password")
     }
 

@@ -40,7 +40,7 @@ where
 pub trait AuthResponse: CancellableSession + Sized {
     type Client: Greetd;
 
-    fn message<'a>(&'a self) -> AuthMessage<'a>;
+    fn message(&self) -> AuthMessage<'_>;
     async fn respond(
         self,
         msg: Option<String>,
@@ -54,7 +54,7 @@ pub trait AuthResponse: CancellableSession + Sized {
 pub trait AuthQuestionResponse: CancellableSession + AuthResponse {
     type Client: Greetd;
 
-    fn auth_question<'a>(&'a self) -> AuthQuestion<'a> {
+    fn auth_question(&self) -> AuthQuestion {
         match self.message() {
             AuthMessage::Visible(message) => AuthQuestion::Visible(message),
             AuthMessage::Secret(message) => AuthQuestion::Secret(message),
@@ -63,23 +63,12 @@ pub trait AuthQuestionResponse: CancellableSession + AuthResponse {
             }
         }
     }
-
-    async fn answer_question(
-        self,
-        answer: String,
-    ) -> Response<
-        <Self as AuthResponse>::Client,
-        Self,
-        CreateSessionResponse<<Self as AuthResponse>::Client>,
-    > {
-        self.respond(Some(answer)).await
-    }
 }
 
 pub trait AuthInformativeResponse: CancellableSession + AuthResponse {
     type Client: Greetd;
 
-    fn auth_informative<'a>(&'a self) -> AuthInformative<'a> {
+    fn auth_informative(&self) -> AuthInformative<'_> {
         match self.message() {
             AuthMessage::Info(message) => AuthInformative::Info(message),
             AuthMessage::Error(message) => AuthInformative::Error(message),
@@ -87,16 +76,6 @@ pub trait AuthInformativeResponse: CancellableSession + AuthResponse {
                 unreachable!("auth informative cannot be a visible or a secret question")
             }
         }
-    }
-
-    async fn answer(
-        self,
-    ) -> Response<
-        <Self as AuthResponse>::Client,
-        Self,
-        CreateSessionResponse<<Self as AuthResponse>::Client>,
-    > {
-        self.respond(None).await
     }
 }
 
@@ -147,8 +126,8 @@ pub enum AuthQuestion<'a> {
 impl<'a> AuthQuestion<'a> {
     pub fn prompt(&self) -> &str {
         match self {
-            AuthQuestion::Visible(prompt) => *prompt,
-            AuthQuestion::Secret(prompt) => *prompt,
+            AuthQuestion::Visible(prompt) => prompt,
+            AuthQuestion::Secret(prompt) => prompt,
         }
     }
 }
@@ -161,8 +140,8 @@ pub enum AuthInformative<'a> {
 impl<'a> AuthInformative<'a> {
     pub fn prompt(&self) -> &str {
         match self {
-            AuthInformative::Info(prompt) => *prompt,
-            AuthInformative::Error(prompt) => *prompt,
+            AuthInformative::Info(prompt) => prompt,
+            AuthInformative::Error(prompt) => prompt,
         }
     }
 }

@@ -179,7 +179,7 @@ where
 {
     type Client = RW;
 
-    fn message<'a>(&'a self) -> super::AuthMessage<'a> {
+    fn message(&self) -> super::AuthMessage<'_> {
         use super::AuthMessage as R;
         match self.r#type {
             AuthMessageType::Visible => R::Visible(&self.message),
