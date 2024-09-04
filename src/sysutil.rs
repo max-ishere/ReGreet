@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::fs::read;
+use std::io;
 use std::io::Result as IOResult;
 use std::path::Path;
 use std::str::from_utf8;
@@ -15,139 +16,110 @@ use std::str::from_utf8;
 use glob::glob;
 use pwd::Passwd;
 use regex::Regex;
+use relm4::spawn_blocking;
+use thiserror::Error;
+use tokio::fs::read_to_string;
 use tracing::{debug, info, warn};
 
 use crate::constants::SESSION_DIRS;
 
-/// Path to the file that contains min/max UID of a regular user
-pub const LOGIN_FILE: &str = "/etc/login.defs";
-/// Default minimum UID for `useradd` (a/c to my system)
-const DEFAULT_UID_MIN: u32 = 1000;
-/// Default maximum UID for `useradd` (a/c to my system)
-const DEFAULT_UID_MAX: u32 = 60000;
-/// XDG data directory variable name (parent directory for X11/Wayland sessions)
-const XDG_DIR_ENV_VAR: &str = "XDG_DATA_DIRS";
+const XDG_DIR_ENV_VAR: &'static str = "XDG_DATA_DIRS";
 
-// Convenient aliases for used maps
-type UserMap = HashMap<String, String>;
-type ShellMap = HashMap<String, Vec<String>>;
 type SessionMap = HashMap<String, Vec<String>>;
 
 /// Stores info of all regular users and sessions
-pub struct SysUtil {
-    /// Maps a user's full name to their system username
-    pub users: UserMap,
-    /// Maps a system username to their shell
-    pub shells: ShellMap,
+pub struct SystemUsersAndSessions {
+    /// Maps from system usename to [`User`].
+    pub users: HashMap<String, User>,
     /// Maps a session's full name to its command
     pub sessions: SessionMap,
 }
 
-impl SysUtil {
-    pub fn new() -> IOResult<Self> {
-        let (users, shells) = Self::init_users()?;
-        Ok(Self {
-            users,
-            shells,
-            sessions: Self::init_sessions()?,
-        })
+pub struct User {
+    pub full_name: String,
+    pub login_shell: Option<String>,
+}
+
+impl User {
+    pub const DEFAULT_SHELL: &'static str = "/bin/sh";
+
+    pub fn shell(&self) -> &str {
+        self.login_shell.as_deref().unwrap_or(Self::DEFAULT_SHELL)
     }
+}
 
-    /// Get the min and max UID for the current system.
-    fn get_uid_limits() -> IOResult<(u32, u32)> {
-        let contents = read(LOGIN_FILE)?;
-        let text = from_utf8(contents.as_slice())
-            .unwrap_or_else(|err| panic!("Login file '{LOGIN_FILE}' is not UTF-8: {err}"));
+impl SystemUsersAndSessions {
+    pub async fn load() -> IOResult<(Self, Vec<NonFatalError>)> {
+        let mut non_fatal_errors = Vec::new();
 
-        // UID_MIN/MAX are limits to a UID for a regular user i.e. a user created with `useradd`.
-        // Thus, to find regular users, we filter the list of users with these UID limits.
-        let min_uid_regex = Regex::new(r"\nUID_MIN\s+([0-9]+)").expect("Invalid regex for UID_MIN");
-        let max_uid_regex = Regex::new(r"\nUID_MAX\s+([0-9]+)").expect("Invalid regex for UID_MAX");
+        let uid_limit = match read_to_string(NormalUser::PATH).await {
+            Ok(text) => spawn_blocking(move || NormalUser::parse_login_defs(&text))
+                .await
+                .unwrap(),
+            Err(e) => {
+                let e = NonFatalError::UidLimitRead(e);
+                warn!("{e}");
+                non_fatal_errors.push(e);
 
-        // Get UID_MIN.
-        let min_uid = if let Some(num) = min_uid_regex
-            .captures(text)
-            .and_then(|capture| capture.get(1))
-        {
-            num.as_str()
-                .parse()
-                .expect("UID_MIN regex didn't capture an integer")
-        } else {
-            warn!("Failed to find UID_MIN in login file: {LOGIN_FILE}");
-            DEFAULT_UID_MIN
+                NormalUser::default()
+            }
         };
 
-        // Get UID_MAX.
-        let max_uid = if let Some(num) = max_uid_regex
-            .captures(text)
-            .and_then(|capture| capture.get(1))
-        {
-            num.as_str()
-                .parse()
-                .expect("UID_MAX regex didn't capture an integer")
-        } else {
-            warn!("Failed to find UID_MAX in login file: {LOGIN_FILE}");
-            DEFAULT_UID_MAX
-        };
+        let users = Self::init_users(uid_limit)?;
 
-        Ok((min_uid, max_uid))
+        Ok((
+            Self {
+                users,
+                sessions: Self::init_sessions()?,
+            },
+            non_fatal_errors,
+        ))
     }
 
-    /// Get the list of regular users.
-    ///
-    /// These are defined as a list of users with UID between `UID_MIN` and `UID_MAX`.
-    fn init_users() -> IOResult<(UserMap, ShellMap)> {
-        let (min_uid, max_uid) = Self::get_uid_limits()?;
-        debug!("UID_MIN: {min_uid}, UID_MAX: {max_uid}");
+    fn init_users(uid_limit: NormalUser) -> IOResult<HashMap<String, User>> {
+        debug!("{uid_limit:?}");
 
         let mut users = HashMap::new();
-        let mut shells = HashMap::new();
 
-        // Iterate over all users in /etc/passwd.
-        for entry in Passwd::iter() {
-            if entry.uid > max_uid || entry.uid < min_uid {
-                // Non-standard user, eg. git or root
-                continue;
-            };
+        for entry in Passwd::iter().filter(|Passwd { uid, .. }| uid_limit.is_normal_user(*uid)) {
+            let full_name = entry
+                .gecos
+                .filter(|gecos| !gecos.is_empty())
+                .as_ref()
+                .map(|full_gecos| {
+                    full_gecos
+                        .split_once(',')
+                        .map(|(name, _)| name)
+                        .unwrap_or(full_gecos)
+                })
+                .map(str::trim)
+                .map(|name| {
+                    if name == "&" {
+                        return capitalize(&entry.name);
+                    }
 
-            // Use the actual system username if the "full name" is not available.
-            let full_name = if let Some(gecos) = entry.gecos {
-                if gecos.is_empty() {
+                    name.to_owned()
+                })
+                .unwrap_or({
                     debug!(
-                        "Found user '{}' with UID '{}' and empty full name",
-                        entry.name, entry.uid
+                        "User {} has no full name specified in gecos (/etc/passwd field)",
+                        entry.name
                     );
                     entry.name.clone()
-                } else {
-                    // Only take first entry in gecos field.
-                    let gecos_name_part: &str = gecos.split(',').next().unwrap_or(&gecos);
-                    debug!(
-                        "Found user '{}' with UID '{}' and full name: {gecos_name_part}",
-                        entry.name, entry.uid
-                    );
-                    gecos_name_part.into()
-                }
-            } else {
-                debug!(
-                    "Found user '{}' with UID '{}' and missing full name",
-                    entry.name, entry.uid
-                );
-                entry.name.clone()
-            };
-            users.insert(full_name, entry.name.clone());
+                });
 
-            if let Some(cmd) = shlex::split(entry.shell.as_str()) {
-                shells.insert(entry.name, cmd);
-            } else {
-                // Skip this user, since a missing command means that we can't use it.
-                warn!(
-                    "Couldn't split shell of username '{}' into arguments: {}",
-                    entry.name, entry.shell
-                );
-            };
+            let login_shell = (!entry.shell.is_empty()).then_some(entry.shell);
+
+            users.insert(
+                entry.name.clone(),
+                User {
+                    full_name,
+                    login_shell,
+                },
+            );
         }
 
-        Ok((users, shells))
+        Ok(users)
     }
 
     /// Get available X11 and Wayland sessions.
@@ -310,5 +282,167 @@ impl SysUtil {
         }
 
         Ok(sessions)
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(ch) => ch.to_uppercase().chain(chars).collect(),
+    }
+}
+
+/// A named tuple of min and max that stores UID limits for normal users.
+#[derive(Debug, PartialEq, Eq)]
+struct NormalUser {
+    min_uid: u64,
+    max_uid: u64,
+}
+
+impl Default for NormalUser {
+    fn default() -> Self {
+        Self {
+            min_uid: Self::MIN_DEFAULT,
+            max_uid: Self::MAX_DEFAULT,
+        }
+    }
+}
+
+impl NormalUser {
+    /// Path to a file that can be parsed by [`Self::parse_login_defs`].
+    pub const PATH: &'static str = "/etc/login.defs";
+
+    pub const MIN_DEFAULT: u64 = 1_000;
+    pub const MAX_DEFAULT: u64 = 60_000;
+
+    /// Parses the [`Self::PATH`] file content and looks for `UID_MIN` and `UID_MAX` definitions. If a definition is
+    /// missing or causes parsing errors, the default values [`Self::MIN_DEFAULT`] and [`Self::MAX_DEFAULT`] are used.
+    ///
+    /// This parser is highly specific to parsing the 2 required values, thus it focuses on doing the least amout of
+    /// compute required to extracting them.
+    ///
+    /// Errors are dropped because they are unlikely and their handling would result in the use of default values
+    /// anyway.
+    pub fn parse_login_defs(text: &str) -> Self {
+        let mut min = None;
+        let mut max = None;
+
+        for line in text.lines().map(str::trim) {
+            // We
+            if let Some(min_str) = min
+                .is_none()
+                .then(|| line.strip_prefix("UID_MIN"))
+                .flatten()
+            {
+                if min_str.starts_with(char::is_whitespace) {
+                    min = Self::parse_number(min_str);
+                }
+            } else if let Some(max_str) = max
+                .is_none()
+                .then(|| line.strip_prefix("UID_MAX"))
+                .flatten()
+            {
+                if max_str.starts_with(char::is_whitespace) {
+                    max = Self::parse_number(max_str);
+                }
+            }
+
+            if min.is_some() && max.is_some() {
+                break;
+            }
+        }
+
+        Self {
+            min_uid: min.unwrap_or(Self::MIN_DEFAULT),
+            max_uid: max.unwrap_or(Self::MAX_DEFAULT),
+        }
+    }
+
+    // Returns true for regular users, false for those outside the UID limit, eg. git or root.
+    pub fn is_normal_user<T>(&self, uid: T) -> bool
+    where
+        T: Into<u64>,
+    {
+        (self.min_uid..self.max_uid).contains(&uid.into())
+    }
+
+    fn parse_number(num: &str) -> Option<u64> {
+        let num = num.trim();
+        if num == "0" {
+            return Some(0);
+        }
+
+        if let Some(octal) = num.strip_prefix('0') {
+            if let Some(hex) = octal.strip_prefix('x') {
+                return u64::from_str_radix(hex, 16).ok();
+            }
+
+            return u64::from_str_radix(octal, 8).ok();
+        }
+
+        num.parse().ok()
+    }
+}
+
+/// Represents an error that is not considered fatal for loading the user and session information, however the
+/// assumptions that the loading process makes may cause unexpected behavior.
+///
+/// This should be shown to the user in the UI.
+#[derive(Error, Debug)]
+pub enum NonFatalError {
+    #[error("Failed to read UID limits defined in '{}': {0}", NormalUser::PATH)]
+    UidLimitRead(#[from] io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    #[allow(non_snake_case)]
+    mod UidLimit {
+        use crate::sysutil::NormalUser;
+
+        #[test_case(
+            "UID_MIN 1
+            UID_MAX 10"
+            => NormalUser { min_uid: 1, max_uid: 10 };
+            "both configured"
+        )]
+        #[test_case(
+            "UID_MAX 10
+            UID_MIN 1"
+            => NormalUser { min_uid: 1, max_uid: 10 };
+            "reverse order"
+        )]
+        #[test_case(
+            "OTHER 20
+            # Comment
+
+            UID_MAX 10
+            UID_MIN 1
+            MORE_TEXT 40
+            "
+            => NormalUser { min_uid: 1, max_uid: 10 };
+            "complex file"
+        )]
+        #[test_case(
+            "UID_MAX10"
+            => NormalUser::default();
+            "no space"
+        )]
+
+        fn parse_login_defs(text: &str) -> NormalUser {
+            NormalUser::parse_login_defs(text)
+        }
+
+        #[test_case("" => None; "empty")]
+        #[test_case("no" => None; "string")]
+        #[test_case("0" => Some(0); "zero")]
+        #[test_case("0x" => None; "0x isn't a hex number")]
+        #[test_case("10" => Some(10); "decimal")]
+        #[test_case("0777" => Some(0o777); "octal")]
+        #[test_case("0xDeadBeef" => Some(0xDeadBeef); "hex")]
+        fn parse_number(num: &str) -> Option<u64> {
+            NormalUser::parse_number(num)
+        }
     }
 }

@@ -39,3 +39,6 @@ tracker = "0.2.0"
 
 [features]
 gtk4_8 = ["gtk4/v4_8"]
+
+[dev-dependencies]
+test-case = "3.3.1"

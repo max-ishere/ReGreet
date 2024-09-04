@@ -21,7 +21,7 @@ use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use greetd::MockGreetd;
 use gui::component::{App, AppInit, EntryOrDropDown, GreetdState};
-use sysutil::SysUtil;
+use sysutil::{SystemUsersAndSessions, User};
 use tracing::subscriber::set_global_default;
 use tracing::warn;
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
@@ -30,6 +30,10 @@ use tracing_subscriber::{
 };
 
 use crate::constants::{APP_ID, CONFIG_PATH, CSS_PATH, LOG_PATH};
+
+#[cfg(test)]
+#[macro_use]
+extern crate test_case;
 
 const MAX_LOG_FILES: usize = 3;
 const MAX_LOG_SIZE: usize = 1024 * 1024;
@@ -77,28 +81,30 @@ fn main() {
     // Keep the guard alive till the end of the function, since logging depends on this.
     let _guard = init_logging(&args.logs, &args.log_level, args.verbose);
 
-    let SysUtil {
-        users,
-        shells: _,
-        sessions,
-    } = SysUtil::new().expect("Couldn't read available users and sessions");
-
     // TODO: Is there a better way? we have to not start tokio until OffsetTime is initialized.
-    let cache = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async {
-            Cache::load(CACHE_PATH).await.unwrap_or_else(|err| {
-                warn!("Failed to load the cache, starting without it: {err}");
-                Cache::default()
-            })
-        });
+    // TODO: What on earth is this let binding?
+    let (cache, (SystemUsersAndSessions { users, sessions }, non_fatal_errors)) =
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (cache, users) =
+                    tokio::join!(Cache::load(CACHE_PATH), SystemUsersAndSessions::load());
+
+                (
+                    cache.unwrap_or_else(|err| {
+                        warn!("Failed to load the cache, starting without it: {err}");
+                        Cache::default()
+                    }),
+                    users.expect("Couldn't read available users and sessions"), // TODO: Don't panic here!
+                )
+            });
 
     let initial_user = cache
         .last_user()
         .and_then(|user| users.contains_key(user).then_some(user.to_string()))
-        .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default());
+        .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default()); // TODO: Make Init accept an option
 
     let last_user_session_cache = cache
         .user_to_last_sess
@@ -115,6 +121,12 @@ fn main() {
         .collect();
 
     let app = relm4::RelmApp::new(APP_ID);
+
+    let users = users
+        .into_iter()
+        .map(|(sys, User { full_name, .. })| (sys, full_name))
+        .collect();
+
     app.run::<App<MockGreetd>>(AppInit {
         users,
         sessions,
