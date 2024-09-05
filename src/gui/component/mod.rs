@@ -10,7 +10,7 @@ use relm4::prelude::*;
 
 #[cfg(feature = "gtk4_8")]
 use crate::config::BgFit;
-use crate::greetd::Greetd;
+use crate::{greetd::Greetd, sysutil::SessionInfo};
 
 mod selector;
 pub use selector::*;
@@ -30,7 +30,7 @@ where
     Client: Greetd,
 {
     pub users: HashMap<String, String>,
-    pub sessions: HashMap<String, Vec<String>>,
+    pub sessions: HashMap<String, SessionInfo>,
 
     pub initial_user: String,
     pub last_user_session_cache: HashMap<String, EntryOrDropDown>,

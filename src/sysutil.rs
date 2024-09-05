@@ -4,40 +4,30 @@
 
 //! Helper for system utilities like users and sessions
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::env;
-use std::fs::read;
+use std::collections::hash_map;
+use std::ffi::OsStr;
 use std::io;
-use std::io::Result as IOResult;
-use std::path::Path;
-use std::str::from_utf8;
+use std::path::{Path, PathBuf};
+use std::{collections::HashMap, env};
 
-use glob::glob;
+use freedesktop_entry_parser::Entry;
 use pwd::Passwd;
-use regex::Regex;
-use relm4::spawn_blocking;
 use thiserror::Error;
-use tokio::fs::read_to_string;
-use tracing::{debug, info, warn};
-
-use crate::constants::SESSION_DIRS;
-
-const XDG_DIR_ENV_VAR: &'static str = "XDG_DATA_DIRS";
-
-type SessionMap = HashMap<String, Vec<String>>;
+use tokio::fs::{read, read_dir, read_to_string};
+use tokio::task::spawn_blocking;
+use tracing::{debug, warn};
 
 /// Stores info of all regular users and sessions
 pub struct SystemUsersAndSessions {
     /// Maps from system usename to [`User`].
     pub users: HashMap<String, User>,
-    /// Maps a session's full name to its command
-    pub sessions: SessionMap,
+    /// Maps a session's xdg desktop file id to [`SessionInfo`].
+    pub sessions: HashMap<String, SessionInfo>,
 }
 
 pub struct User {
     pub full_name: String,
-    pub login_shell: Option<String>,
+    login_shell: Option<String>,
 }
 
 impl User {
@@ -49,34 +39,33 @@ impl User {
 }
 
 impl SystemUsersAndSessions {
-    pub async fn load() -> IOResult<(Self, Vec<NonFatalError>)> {
-        let mut non_fatal_errors = Vec::new();
+    const SESSION_DIRS_ENV: &'static str = "XDG_DATA_DIRS";
+    const SESSION_DIRS_DEFAULT: &'static str = "/usr/local/share/:/usr/share/";
 
+    pub async fn load(x11_prefix: Vec<String>) -> io::Result<Self> {
         let uid_limit = match read_to_string(NormalUser::PATH).await {
             Ok(text) => spawn_blocking(move || NormalUser::parse_login_defs(&text))
                 .await
                 .unwrap(),
             Err(e) => {
-                let e = NonFatalError::UidLimitRead(e);
                 warn!("{e}");
-                non_fatal_errors.push(e);
 
                 NormalUser::default()
             }
         };
 
-        let users = Self::init_users(uid_limit)?;
+        let (users, sessions) = tokio::join!(
+            spawn_blocking(move || Self::init_users(uid_limit)),
+            Self::init_sessions(x11_prefix)
+        );
 
-        Ok((
-            Self {
-                users,
-                sessions: Self::init_sessions()?,
-            },
-            non_fatal_errors,
-        ))
+        let users = users.unwrap().unwrap_or_default();
+        let sessions = sessions.unwrap_or_default();
+
+        Ok(Self { users, sessions })
     }
 
-    fn init_users(uid_limit: NormalUser) -> IOResult<HashMap<String, User>> {
+    fn init_users(uid_limit: NormalUser) -> io::Result<HashMap<String, User>> {
         debug!("{uid_limit:?}");
 
         let mut users = HashMap::new();
@@ -122,169 +111,156 @@ impl SystemUsersAndSessions {
         Ok(users)
     }
 
-    /// Get available X11 and Wayland sessions.
+    /// Get the avaliable graphical X11 and Wayland sessions. These are retrieved from [`Self::SESSION_DIRS_ENV`]
+    /// (defaults to [`Self::SESSION_DIRS_DEFAULT`]). For each directory from the env, scans `/xsessions` and
+    /// `/wayland-sessions` (Wayland takes priority if an x11 desktop file has the same ID). The resulting hashmap maps
+    /// the desktop file ID to the information about that session file.
     ///
-    /// These are defined as either X11 or Wayland session desktop files stored in specific
-    /// directories.
-    fn init_sessions() -> IOResult<SessionMap> {
-        let mut found_session_names = HashSet::new();
-        let mut sessions = HashMap::new();
+    /// For each X11 session, `x11_prefix` is added.
+    async fn init_sessions(x11_prefix: Vec<String>) -> io::Result<HashMap<String, SessionInfo>> {
+        let session_dirs = env::var(Self::SESSION_DIRS_ENV)
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .unwrap_or_else(|| Self::SESSION_DIRS_DEFAULT.to_string());
 
-        // Use the XDG spec if available, else use the one that's compiled.
-        // The XDG env var can change after compilation in some distros like NixOS.
-        let session_dirs = if let Ok(sess_parent_dirs) = env::var(XDG_DIR_ENV_VAR) {
-            debug!("Found XDG env var {XDG_DIR_ENV_VAR}: {sess_parent_dirs}");
-            match sess_parent_dirs
-                .split(':')
-                .map(|parent_dir| format!("{parent_dir}/xsessions:{parent_dir}/wayland-sessions"))
-                .reduce(|a, b| a + ":" + &b)
-            {
-                None => SESSION_DIRS.to_string(),
-                Some(dirs) => dirs,
-            }
-        } else {
-            SESSION_DIRS.to_string()
-        };
+        let (x11_dirs, wayland_dirs): (Vec<_>, Vec<_>) = session_dirs
+            .split(':')
+            .map(|dir| {
+                (
+                    PathBuf::from(dir).join("xsessions"),
+                    PathBuf::from(dir).join("wayland-sessions"),
+                )
+            })
+            .unzip();
 
-        for sess_dir in session_dirs.split(':') {
-            let sess_parent_dir = if let Some(sess_parent_dir) = Path::new(sess_dir).parent() {
-                sess_parent_dir
-            } else {
-                warn!("Session directory does not have a parent: {sess_dir}");
+        let (x11_entries, wayland_entries) = tokio::join!(
+            Self::get_desktop_entries_in_dirs(x11_dirs),
+            Self::get_desktop_entries_in_dirs(wayland_dirs),
+        );
+
+        let mut x11_entries = x11_entries.unwrap_or_default();
+        let wayland_entries = wayland_entries.unwrap_or_default();
+
+        x11_entries.iter_mut().for_each(|(_, v)| {
+            let mut command = x11_prefix.clone();
+            command.append(&mut v.command);
+
+            v.command = command;
+        });
+
+        x11_entries.extend(wayland_entries);
+        Ok(x11_entries)
+    }
+
+    /// Given a list of directories (in order as they appear in the env var) scan those dirs recursively.
+    /// For each `*.desktop` file, process it and place into the hash map.
+    /// However if a desktop file's id ([as defined by the XDG spec](https://specifications.freedesktop.org/desktop-entry-spec/latest/file-naming.html#desktop-file-id))
+    /// is already processed, skip the identical id.
+    async fn get_desktop_entries_in_dirs<P>(
+        dirs: Vec<P>,
+    ) -> Result<HashMap<String, SessionInfo>, DesktopFileError>
+    where
+        P: AsRef<Path> + std::marker::Send + 'static + std::marker::Sync,
+    {
+        let mut dirs_of_files = Vec::new();
+
+        for dir in dirs {
+            let Ok(files) = Self::recursively_find_desktop_files(&dir).await else {
+                // Try to collect as many entries that yield Ok without early return
                 continue;
             };
-            debug!("Checking session directory: {sess_dir}");
-            // Iterate over all '.desktop' files.
-            for glob_path in glob(&format!("{sess_dir}/*.desktop"))
-                .expect("Invalid glob pattern for session desktop files")
-            {
-                let path = match glob_path {
-                    Ok(path) => path,
-                    Err(err) => {
-                        warn!("Error when globbing: {err}");
-                        continue;
-                    }
-                };
-                info!("Now scanning session file: {}", path.display());
 
-                let contents = read(&path)?;
-                let text = from_utf8(contents.as_slice()).unwrap_or_else(|err| {
-                    panic!("Session file '{}' is not UTF-8: {}", path.display(), err)
-                });
+            dirs_of_files.push((dir, files));
+        }
 
-                let fname_and_type = match path.strip_prefix(sess_parent_dir) {
-                    Ok(fname_and_type) => fname_and_type.to_owned(),
-                    Err(err) => {
-                        warn!("Error with file name: {err}");
-                        continue;
-                    }
-                };
+        let mut map = HashMap::new();
+        for (id, file) in dirs_of_files.into_iter().flat_map(|(base, files)| {
+            files
+                .into_iter()
+                .map(move |file| (Self::desktop_file_id(&base, &file), file))
+        }) {
+            let map_entry = map.entry(id);
 
-                if found_session_names.contains(&fname_and_type) {
-                    debug!(
-                        "{fname_and_type:?} was already found elsewhere, skipping {}",
-                        path.display()
-                    );
+            if matches!(map_entry, hash_map::Entry::Vacant(_)) {
+                let Ok(Some(entry)) = SessionInfo::load(file).await else {
                     continue;
                 };
 
-                // The session launch command is specified as: Exec=command arg1 arg2...
-                let cmd_regex =
-                    Regex::new(r"Exec=(.*)").expect("Invalid regex for session command");
-                // The session name is specified as: Name=My Session
-                let name_regex = Regex::new(r"Name=(.*)").expect("Invalid regex for session name");
-
-                // Hiding could be either as Hidden=true or NoDisplay=true
-                let hidden_regex = Regex::new(r"Hidden=(.*)").expect("Invalid regex for hidden");
-                let no_display_regex =
-                    Regex::new(r"NoDisplay=(.*)").expect("Invalid regex for no display");
-
-                let hidden: bool = if let Some(hidden_str) = hidden_regex
-                    .captures(text)
-                    .and_then(|capture| capture.get(1))
-                {
-                    hidden_str.as_str().parse().unwrap_or(false)
-                } else {
-                    false
-                };
-
-                let no_display: bool = if let Some(no_display_str) = no_display_regex
-                    .captures(text)
-                    .and_then(|capture| capture.get(1))
-                {
-                    no_display_str.as_str().parse().unwrap_or(false)
-                } else {
-                    false
-                };
-
-                if hidden | no_display {
-                    found_session_names.insert(fname_and_type);
-                    continue;
-                };
-
-                // Parse the desktop file to get the session command.
-                let cmd = if let Some(cmd_str) =
-                    cmd_regex.captures(text).and_then(|capture| capture.get(1))
-                {
-                    if let Some(cmd) = shlex::split(cmd_str.as_str()) {
-                        cmd
-                    } else {
-                        warn!(
-                            "Couldn't split command of '{}' into arguments: {}",
-                            path.display(),
-                            cmd_str.as_str()
-                        );
-                        // Skip the desktop file, since a missing command means that we can't
-                        // use it.
-                        continue;
-                    }
-                } else {
-                    warn!("No command found for session: {}", path.display());
-                    // Skip the desktop file, since a missing command means that we can't use it.
-                    continue;
-                };
-
-                // Get the full name of this session.
-                let name = if let Some(name) =
-                    name_regex.captures(text).and_then(|capture| capture.get(1))
-                {
-                    debug!(
-                        "Found name '{}' for session '{}' with command '{:?}'",
-                        name.as_str(),
-                        path.display(),
-                        cmd
-                    );
-                    name.as_str()
-                } else if let Some(stem) = path.file_stem() {
-                    // Get the stem of the filename of this desktop file.
-                    // This is used as backup, in case the file name doesn't exist.
-                    if let Some(stem) = stem.to_str() {
-                        debug!(
-                            "Using file stem '{stem}', since no name was found for session: {}",
-                            path.display()
-                        );
-                        stem
-                    } else {
-                        warn!("Non-UTF-8 file stem in session file: {}", path.display());
-                        // No way to display this session name, so just skip it.
-                        continue;
-                    }
-                } else {
-                    warn!("No file stem found for session: {}", path.display());
-                    // No file stem implies no file name, which shouldn't happen.
-                    // Since there's no full name nor file stem, just skip this anomalous
-                    // session.
-                    continue;
-                };
-                found_session_names.insert(fname_and_type);
-                sessions.insert(name.to_string(), cmd);
+                // Cannot use or_insert_with because of async.
+                map_entry.or_insert(entry);
             }
         }
 
-        Ok(sessions)
+        Ok(map)
+    }
+
+    /// Iterates over the directory and yields everything that has a `.desktop` extension.
+    /// If the entry is a directory, recurses into it and appends all the files there to the list.
+    #[async_recursion]
+    async fn recursively_find_desktop_files<P>(dir: P) -> io::Result<Vec<PathBuf>>
+    where
+        P: AsRef<Path> + std::marker::Send,
+    {
+        // You will see a lot of `let Ok else continue` in this function.
+        // This is because we try to ignore as many errors as possible.
+        // Otherwise even a single permission error can cause the session list to be empty.
+        let mut ls = read_dir(dir).await?;
+
+        let mut files = Vec::new();
+        while let Some(entry) = ls.next_entry().await? {
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                let Ok(mut recursed) = Self::recursively_find_desktop_files(entry.path()).await
+                else {
+                    continue;
+                };
+
+                files.append(&mut recursed);
+
+                continue;
+            }
+
+            if !entry
+                .path()
+                .extension()
+                .map(|e| e.to_string_lossy() == "desktop")
+                .unwrap_or(false)
+            {
+                continue;
+            };
+
+            files.push(entry.path());
+        }
+
+        Ok(files)
+    }
+
+    /// Returns a dektop file id given a base directory and a path to the desktop file. The algorithm is described in
+    /// the [XDG spec: Desktop File ID](https://specifications.freedesktop.org/desktop-entry-spec/latest/file-naming.html#desktop-file-id).
+    ///
+    /// # Panics
+    ///
+    /// This function requires that `base` is prefix of `file`.
+    fn desktop_file_id<P1, P2>(base: P1, file: P2) -> String
+    where
+        P1: AsRef<Path>,
+        P2: AsRef<Path>,
+    {
+        let base = base.as_ref();
+        let file = file.as_ref();
+
+        let path = file.strip_prefix(base).unwrap().with_extension("");
+
+        path.iter()
+            .map(OsStr::to_string_lossy)
+            .fold(String::new(), |acc, item| acc + &item)
     }
 }
 
+/// Returs input, but the first character is capitalized.
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -385,14 +361,56 @@ impl NormalUser {
     }
 }
 
-/// Represents an error that is not considered fatal for loading the user and session information, however the
-/// assumptions that the loading process makes may cause unexpected behavior.
-///
-/// This should be shown to the user in the UI.
+#[derive(Debug)]
+pub struct SessionInfo {
+    /// The displayed name of the session
+    pub name: String,
+    /// The command to run when the session starts.
+    pub command: Vec<String>,
+}
+
+impl SessionInfo {
+    async fn load<P>(path: P) -> Result<Option<Self>, DesktopFileError>
+    where
+        P: AsRef<Path>,
+    {
+        let skip = Ok(None);
+
+        let contents = read(path).await?;
+        let desktop_file = Entry::parse(contents)?;
+        let entry = desktop_file.section("Desktop Entry");
+
+        if let Some("true") = entry.attr("Hidden") {
+            return skip;
+        }
+
+        if let Some("true") = entry.attr("NoDisplay") {
+            return skip;
+        }
+
+        let Some(name) = entry.attr("Name") else {
+            return skip;
+        };
+
+        let Some(exec) = entry.attr("Exec") else {
+            return skip;
+        };
+
+        Ok(shlex::split(exec).map(|command| Self {
+            name: name.to_string(),
+            command,
+        }))
+    }
+}
+
+/// Represents errors from loading the xdg desktop files.
 #[derive(Error, Debug)]
-pub enum NonFatalError {
-    #[error("Failed to read UID limits defined in '{}': {0}", NormalUser::PATH)]
-    UidLimitRead(#[from] io::Error),
+pub enum DesktopFileError {
+    #[error("I/O error occured while reading a desktop file: {0}")]
+    IO(#[from] io::Error),
+
+    #[error("XDG desktop file parsing error: {0}")]
+    Xdg(#[from] freedesktop_entry_parser::ParseError),
 }
 
 #[cfg(test)]

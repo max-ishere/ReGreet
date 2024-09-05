@@ -11,17 +11,18 @@ mod gui;
 mod sysutil;
 pub mod tomlutils;
 
+use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Result as IoResult, Write};
 use std::path::{Path, PathBuf};
 
-use cache::Cache;
+use cache::{Cache, SessionIdOrCmdline};
 use clap::{Parser, ValueEnum};
 use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use greetd::MockGreetd;
 use gui::component::{App, AppInit, EntryOrDropDown, GreetdState};
-use sysutil::{SystemUsersAndSessions, User};
+use sysutil::SystemUsersAndSessions;
 use tracing::subscriber::set_global_default;
 use tracing::warn;
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
@@ -30,6 +31,9 @@ use tracing_subscriber::{
 };
 
 use crate::constants::{APP_ID, CONFIG_PATH, CSS_PATH, LOG_PATH};
+
+#[macro_use]
+extern crate async_recursion;
 
 #[cfg(test)]
 #[macro_use]
@@ -77,20 +81,29 @@ struct Args {
 }
 
 fn main() {
-    let args = Args::parse();
+    let Args {
+        logs,
+        log_level,
+        verbose,
+        config,
+        style,
+        demo,
+    } = Args::parse();
     // Keep the guard alive till the end of the function, since logging depends on this.
-    let _guard = init_logging(&args.logs, &args.log_level, args.verbose);
+    let _guard = init_logging(&logs, &log_level, verbose);
 
     // TODO: Is there a better way? we have to not start tokio until OffsetTime is initialized.
     // TODO: What on earth is this let binding?
-    let (cache, (SystemUsersAndSessions { users, sessions }, non_fatal_errors)) =
+    let (cache, SystemUsersAndSessions { users, sessions }) =
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(async {
-                let (cache, users) =
-                    tokio::join!(Cache::load(CACHE_PATH), SystemUsersAndSessions::load());
+                let (cache, users) = tokio::join!(
+                    Cache::load(CACHE_PATH),
+                    SystemUsersAndSessions::load(Vec::new())
+                );
 
                 (
                     cache.unwrap_or_else(|err| {
@@ -106,17 +119,15 @@ fn main() {
         .and_then(|user| users.contains_key(user).then_some(user.to_string()))
         .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default()); // TODO: Make Init accept an option
 
-    let last_user_session_cache = cache
+    let mut last_user_session_cache: HashMap<_, _> = cache
         .user_to_last_sess
         .into_iter()
         .filter_map(|(username, session)| match session {
-            cache::SessionIdOrCmdline::ID(id) => sessions
+            SessionIdOrCmdline::ID(id) => sessions
                 .contains_key(&id)
                 .then_some((username, EntryOrDropDown::DropDown(id))),
 
-            cache::SessionIdOrCmdline::Command(cmd) => {
-                Some((username, EntryOrDropDown::Entry(cmd)))
-            }
+            SessionIdOrCmdline::Command(cmd) => Some((username, EntryOrDropDown::Entry(cmd))),
         })
         .collect();
 
@@ -124,7 +135,13 @@ fn main() {
 
     let users = users
         .into_iter()
-        .map(|(sys, User { full_name, .. })| (sys, full_name))
+        .map(|(sys, user)| {
+            if sessions.is_empty() {
+                last_user_session_cache
+                    .insert(sys.clone(), EntryOrDropDown::Entry(user.shell().to_owned()));
+            }
+            (sys, user.full_name)
+        })
         .collect();
 
     app.run::<App<MockGreetd>>(AppInit {
