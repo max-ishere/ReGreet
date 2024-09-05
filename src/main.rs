@@ -30,7 +30,7 @@ use tracing_subscriber::{
     filter::LevelFilter, fmt::layer, fmt::time::OffsetTime, layer::SubscriberExt,
 };
 
-use crate::constants::{APP_ID, CONFIG_PATH, CSS_PATH, LOG_PATH};
+use crate::constants::{APP_ID, CONFIG_PATH, LOG_PATH};
 
 #[macro_use]
 extern crate async_recursion;
@@ -71,10 +71,6 @@ struct Args {
     #[arg(short, long, value_name = "PATH", default_value = CONFIG_PATH)]
     config: PathBuf,
 
-    /// The path to the custom CSS stylesheet
-    #[arg(short, long, value_name = "PATH", default_value = CSS_PATH)]
-    style: PathBuf,
-
     /// Run in demo mode
     #[arg(long)]
     demo: bool,
@@ -86,7 +82,6 @@ fn main() {
         log_level,
         verbose,
         config,
-        style,
         demo,
     } = Args::parse();
     // Keep the guard alive till the end of the function, since logging depends on this.
