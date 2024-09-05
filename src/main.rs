@@ -11,18 +11,20 @@ mod gui;
 mod sysutil;
 
 use std::collections::HashMap;
+use std::env;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Result as IoResult, Write};
 use std::path::{Path, PathBuf};
 
 use cache::{Cache, SessionIdOrCmdline};
 use clap::{Parser, ValueEnum};
-use config::{AppearanceConfig, BackgroundConfig, Config};
+use config::{AppearanceConfig, BackgroundConfig, Config, SystemCommandsConfig};
 use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use greetd::{Greetd, MockGreetd};
 use gui::component::{App, AppInit, EntryOrDropDown, GreetdState};
-use sysutil::{SessionInfo, SystemUsersAndSessions, User};
+use sysutil::SystemUsersAndSessions;
+use tokio::net::UnixStream;
 use tracing::subscriber::set_global_default;
 use tracing::warn;
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
@@ -87,19 +89,40 @@ fn main() {
     // Keep the guard alive till the end of the function, since logging depends on this.
     let _guard = init_logging(&logs, &log_level, verbose);
 
-    let (cache, config, users) = tokio::runtime::Builder::new_current_thread()
+    let (cache, mut config, users) = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
         .block_on(load_files(config));
 
-    let greetd_state = GreetdState::AuthQuestion {
-        session: MockGreetd {},
-        credential: String::new(),
-    };
-
     let app = relm4::RelmApp::new(APP_ID);
-    app.run::<App<MockGreetd>>(mk_app_init(greetd_state, cache, users, config));
+
+    if demo {
+        config.commands.reboot = vec![];
+        config.commands.poweroff = vec![];
+
+        let greetd_state = GreetdState::AuthQuestion {
+            session: MockGreetd {},
+            credential: String::new(),
+        };
+
+        app.run::<App<MockGreetd>>(mk_app_init(greetd_state, cache, users, config));
+
+        return;
+    }
+
+    let socket_path = env::var("GREETD_SOCK").unwrap();
+    let socket = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(UnixStream::connect(socket_path))
+        .unwrap();
+
+    let greetd_state = GreetdState::NotCreated(socket);
+
+    app.run::<App<UnixStream>>(mk_app_init(greetd_state, cache, users, config));
+    todo!()
 }
 
 async fn load_files<P>(config: P) -> (Cache, Config, SystemUsersAndSessions)
@@ -147,6 +170,11 @@ where
 
     let BackgroundConfig { path: picture, fit } = background;
     let AppearanceConfig { greeting_msg } = appearance;
+    let SystemCommandsConfig {
+        reboot,
+        poweroff,
+        x11_prefix: _,
+    } = commands;
 
     let initial_user = cache
         .last_user()
@@ -186,6 +214,8 @@ where
         picture,
         fit: fit.into(),
         title_message: greeting_msg,
+        reboot_cmd: reboot,
+        poweroff_cmd: poweroff,
     }
 }
 
