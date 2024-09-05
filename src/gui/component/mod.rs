@@ -31,6 +31,7 @@ where
 {
     pub users: HashMap<String, String>,
     pub sessions: HashMap<String, SessionInfo>,
+    pub env: HashMap<String, String>,
 
     pub initial_user: String,
     pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
@@ -70,6 +71,7 @@ where
         let AppInit {
             users,
             sessions,
+            env,
             initial_user,
             last_user_session_cache,
             greetd_state,
@@ -79,6 +81,7 @@ where
             .launch(AuthUiInit {
                 users,
                 sessions,
+                env,
                 initial_user,
                 last_user_session_cache,
                 greetd_state,

@@ -40,7 +40,7 @@ impl Cache {
         let string = read_to_string(path).await?;
         let value: Self = tokio::task::spawn_blocking(move || toml::from_str(&string))
             .await
-            .expect("Failed to join a Cache TOML parsing task")?;
+            .unwrap()?;
 
         Ok(value)
     }

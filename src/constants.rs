@@ -43,6 +43,8 @@ pub const LOG_PATH: &str = concatcp!(LOG_DIR, "/log");
 pub const REBOOT_CMD: &str = env_or!("REBOOT_CMD", "reboot");
 /// Default command for shutting down
 pub const POWEROFF_CMD: &str = env_or!("POWEROFF_CMD", "poweroff");
+/// Command prefix for X11 sessions to start the X server
+pub const X11_CMD_PREFIX: &str = env_or!("X11_CMD_PREFIX", "startx /usr/bin/env");
 
 /// Default greeting message
 pub const GREETING_MSG: &str = "Welcome back!";

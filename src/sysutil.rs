@@ -18,6 +18,7 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, warn};
 
 /// Stores info of all regular users and sessions
+#[derive(Default, Debug)]
 pub struct SystemUsersAndSessions {
     /// Maps from system usename to [`User`].
     pub users: HashMap<String, User>,
@@ -25,6 +26,7 @@ pub struct SystemUsersAndSessions {
     pub sessions: HashMap<String, SessionInfo>,
 }
 
+#[derive(Default, Debug)]
 pub struct User {
     pub full_name: String,
     login_shell: Option<String>,
@@ -42,7 +44,7 @@ impl SystemUsersAndSessions {
     const SESSION_DIRS_ENV: &'static str = "XDG_DATA_DIRS";
     const SESSION_DIRS_DEFAULT: &'static str = "/usr/local/share/:/usr/share/";
 
-    pub async fn load(x11_prefix: Vec<String>) -> io::Result<Self> {
+    pub async fn load(x11_prefix: &[String]) -> io::Result<Self> {
         let uid_limit = match read_to_string(NormalUser::PATH).await {
             Ok(text) => spawn_blocking(move || NormalUser::parse_login_defs(&text))
                 .await
@@ -117,7 +119,7 @@ impl SystemUsersAndSessions {
     /// the desktop file ID to the information about that session file.
     ///
     /// For each X11 session, `x11_prefix` is added.
-    async fn init_sessions(x11_prefix: Vec<String>) -> io::Result<HashMap<String, SessionInfo>> {
+    async fn init_sessions(x11_prefix: &[String]) -> io::Result<HashMap<String, SessionInfo>> {
         let session_dirs = env::var(Self::SESSION_DIRS_ENV)
             .into_iter()
             .find(|s| !s.is_empty())
@@ -142,7 +144,7 @@ impl SystemUsersAndSessions {
         let wayland_entries = wayland_entries.unwrap_or_default();
 
         x11_entries.iter_mut().for_each(|(_, v)| {
-            let mut command = x11_prefix.clone();
+            let mut command = x11_prefix.to_vec();
             command.append(&mut v.command);
 
             v.command = command;

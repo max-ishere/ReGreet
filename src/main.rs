@@ -9,7 +9,6 @@ mod error;
 mod greetd;
 mod gui;
 mod sysutil;
-pub mod tomlutils;
 
 use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
@@ -18,11 +17,12 @@ use std::path::{Path, PathBuf};
 
 use cache::{Cache, SessionIdOrCmdline};
 use clap::{Parser, ValueEnum};
+use config::Config;
 use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
-use greetd::MockGreetd;
+use greetd::{Greetd, MockGreetd};
 use gui::component::{App, AppInit, EntryOrDropDown, GreetdState};
-use sysutil::SystemUsersAndSessions;
+use sysutil::{SessionInfo, SystemUsersAndSessions, User};
 use tracing::subscriber::set_global_default;
 use tracing::warn;
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
@@ -87,32 +87,68 @@ fn main() {
     // Keep the guard alive till the end of the function, since logging depends on this.
     let _guard = init_logging(&logs, &log_level, verbose);
 
-    // TODO: Is there a better way? we have to not start tokio until OffsetTime is initialized.
-    // TODO: What on earth is this let binding?
-    let (cache, SystemUsersAndSessions { users, sessions }) =
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async {
-                let (cache, users) = tokio::join!(
-                    Cache::load(CACHE_PATH),
-                    SystemUsersAndSessions::load(Vec::new())
-                );
+    let (cache, config, users) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(load_files(config));
 
-                (
-                    cache.unwrap_or_else(|err| {
-                        warn!("Failed to load the cache, starting without it: {err}");
-                        Cache::default()
-                    }),
-                    users.expect("Couldn't read available users and sessions"), // TODO: Don't panic here!
-                )
-            });
+    let greetd_state = GreetdState::AuthQuestion {
+        session: MockGreetd {},
+        credential: String::new(),
+    };
+
+    let app = relm4::RelmApp::new(APP_ID);
+    app.run::<App<MockGreetd>>(mk_app_init(greetd_state, cache, users, config));
+}
+
+async fn load_files<P>(config: P) -> (Cache, Config, SystemUsersAndSessions)
+where
+    P: AsRef<Path>,
+{
+    let (cache, config) = tokio::join!(Cache::load(CACHE_PATH), Config::load(config),);
+
+    let cache = cache.unwrap_or_else(|err| {
+        warn!("Failed to load the cache, starting without it: {err}");
+        Cache::default()
+    });
+
+    let config = config.unwrap_or_else(|err| {
+        warn!("Failed to load the config file, starting with the defaults: {err}");
+        Config::default()
+    });
+
+    let users = SystemUsersAndSessions::load(&config.commands.x11_prefix)
+        .await
+        .unwrap_or_else(|err| {
+            warn!("Failed to the list of users and sessions on this system, starting with no options: {err}");
+            SystemUsersAndSessions::default()
+        });
+
+    (cache, config, users)
+}
+
+fn mk_app_init<Client>(
+    greetd_state: GreetdState<Client>,
+    cache: Cache,
+    users: SystemUsersAndSessions,
+    config: Config,
+) -> AppInit<Client>
+where
+    Client: Greetd,
+{
+    let SystemUsersAndSessions { users, sessions } = users;
+    let Config {
+        appearance,
+        background,
+        commands,
+        env,
+    } = config;
 
     let initial_user = cache
         .last_user()
         .and_then(|user| users.contains_key(user).then_some(user.to_string()))
-        .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default()); // TODO: Make Init accept an option
+        .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default());
 
     let mut last_user_session_cache: HashMap<_, _> = cache
         .user_to_last_sess
@@ -126,8 +162,6 @@ fn main() {
         })
         .collect();
 
-    let app = relm4::RelmApp::new(APP_ID);
-
     let users = users
         .into_iter()
         .map(|(sys, user)| {
@@ -139,16 +173,14 @@ fn main() {
         })
         .collect();
 
-    app.run::<App<MockGreetd>>(AppInit {
+    AppInit {
         users,
         sessions,
+        env,
         initial_user,
         last_user_session_cache,
-        greetd_state: GreetdState::AuthQuestion {
-            session: MockGreetd {},
-            credential: String::new(),
-        },
-    });
+        greetd_state,
+    }
 }
 
 /// Initialize the log file with file rotation.
