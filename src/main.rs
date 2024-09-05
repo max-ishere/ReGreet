@@ -112,7 +112,8 @@ fn main() {
     }
 
     let socket_path = env::var("GREETD_SOCK").unwrap();
-    let socket = tokio::runtime::Builder::new_current_thread()
+
+    let socket = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
@@ -122,7 +123,6 @@ fn main() {
     let greetd_state = GreetdState::NotCreated(socket);
 
     app.run::<App<UnixStream>>(mk_app_init(greetd_state, cache, users, config));
-    todo!()
 }
 
 async fn load_files<P>(config: P) -> (Cache, Config, SystemUsersAndSessions)
