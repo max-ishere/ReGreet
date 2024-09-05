@@ -34,6 +34,7 @@ pub struct Selector {
     selection: EntryOrDropDown,
     locked: bool,
     update_view_event: bool,
+    manual_input_only: bool,
 
     last_entry: String,
     last_option_id: String,
@@ -99,7 +100,7 @@ impl SimpleComponent for Selector {
                         set_active_id: Some(active_id),
 
                         #[watch]
-                        set_sensitive: !model.locked,
+                        set_sensitive: !model.locked && !model.manual_input_only,
                         connect_changed[sender] => move |dropdown| {
                             if !dropdown.is_sensitive() {
                                 return;
@@ -148,7 +149,7 @@ impl SimpleComponent for Selector {
                 set_active: model.toggle_state(),
 
                 #[watch]
-                set_sensitive: !model.locked,
+                set_sensitive: !model.locked && !model.manual_input_only,
                 connect_clicked[sender] => move |toggle| {
                     if !toggle.is_sensitive() {
                         return;
@@ -165,25 +166,37 @@ impl SimpleComponent for Selector {
         root: &Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        // TODO: If options is empty, force entry mode and lock the toggle button. Effectively force manual input
         let SelectorInit {
             options,
-            initial_selection: selection,
+            initial_selection: mut selection,
             locked,
             toggle_icon_name,
             toggle_tooltip,
             entry_placeholder,
         } = init;
 
+        let mut manual_input_only = false;
+        if options.is_empty() {
+            manual_input_only = true;
+
+            if matches!(selection, EntryOrDropDown::DropDown(_)) {
+                selection = EntryOrDropDown::Entry(String::new());
+            }
+        }
+
         let (last_entry, last_option_id) = match &selection {
-            EntryOrDropDown::Entry(entry) => (entry.clone(), options[0].id.clone()),
+            EntryOrDropDown::Entry(entry) => (
+                entry.clone(),
+                options.get(0).map(|opt| opt.id.clone()).unwrap_or_default(),
+            ),
             EntryOrDropDown::DropDown(id) => (String::new(), id.clone()),
         };
 
         let model = Self {
             selection,
             locked,
-            update_view_event: false,
+            update_view_event: manual_input_only,
+            manual_input_only,
 
             last_entry,
             last_option_id,
@@ -196,20 +209,21 @@ impl SimpleComponent for Selector {
             .iter()
             .for_each(|opt| widgets.combo_box.append(Some(&opt.id), &opt.text));
 
-        // TODO: Figure out if `update` should be supressed.
+        if !manual_input_only {
+            let id_comes_from_options =
+                widgets.combo_box.set_active_id(Some(&model.last_option_id));
 
-        let id_comes_from_options = widgets.combo_box.set_active_id(Some(&model.last_option_id));
-
-        if !id_comes_from_options {
-            unreachable!(
+            if !id_comes_from_options {
+                unreachable!(
                 "The id `{id}` must be from the options list, all of which must be inserted before the active default is set.",
                 id = model.last_option_id,
             )
-        }
+            }
 
-        // Because `set_active_id` emits an update model signal
-        if let EntryOrDropDown::Entry(_) = model.selection {
-            sender.input(SelectorMsg::ToggleMode);
+            // Because `set_active_id` emits an update model signal
+            if let EntryOrDropDown::Entry(_) = model.selection {
+                sender.input(SelectorMsg::ToggleMode);
+            }
         }
 
         ComponentParts { model, widgets }
@@ -221,6 +235,16 @@ impl SimpleComponent for Selector {
 
         match message {
             I::ToggleMode => {
+                if self.manual_input_only {
+                    self.selection = EntryOrDropDown::Entry(self.last_entry.clone());
+                    sender.output(Self::Output::CurrentSelection(self.selection.clone())).expect(
+                        "selector's controller must not be dropped because this is an input widget.",
+                    );
+                    self.update_view_event = true;
+
+                    return;
+                }
+
                 let new = match &self.selection {
                     EntryOrDropDown::Entry(last) => {
                         self.last_entry = last.clone();
@@ -248,6 +272,10 @@ impl SimpleComponent for Selector {
             I::Lock => self.locked = true,
             I::Unlock => self.locked = false,
             I::Set(selection) => {
+                if self.manual_input_only && matches!(selection, EntryOrDropDown::DropDown(_)) {
+                    return;
+                }
+
                 self.update_view_event = true;
                 match &self.selection {
                     EntryOrDropDown::Entry(last) => self.last_entry = last.clone(),
