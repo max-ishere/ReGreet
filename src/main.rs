@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use cache::{Cache, SessionIdOrCmdline};
 use clap::{Parser, ValueEnum};
-use config::Config;
+use config::{AppearanceConfig, BackgroundConfig, Config};
 use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use greetd::{Greetd, MockGreetd};
@@ -145,6 +145,9 @@ where
         env,
     } = config;
 
+    let BackgroundConfig { path: picture, fit } = background;
+    let AppearanceConfig { greeting_msg } = appearance;
+
     let initial_user = cache
         .last_user()
         .and_then(|user| users.contains_key(user).then_some(user.to_string()))
@@ -180,6 +183,9 @@ where
         initial_user,
         last_user_session_cache,
         greetd_state,
+        picture,
+        fit: fit.into(),
+        title_message: greeting_msg,
     }
 }
 

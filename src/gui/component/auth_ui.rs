@@ -73,7 +73,6 @@ where
         gtk::Grid {
             set_column_spacing: 15,
             set_row_spacing: 15,
-            set_margin_all: 15,
 
             #[template]
             attach[0, USER_ROW, 1, 1] =  &SelectorLabel {

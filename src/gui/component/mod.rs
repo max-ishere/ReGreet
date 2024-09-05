@@ -4,9 +4,10 @@
 
 //! Setup for using the greeter as a Relm4 component
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
-use relm4::prelude::*;
+use gtk4::ContentFit;
+use relm4::{gtk::prelude::*, prelude::*};
 
 #[cfg(feature = "gtk4_8")]
 use crate::config::BgFit;
@@ -37,6 +38,10 @@ where
     pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
 
     pub greetd_state: GreetdState<Client>,
+
+    pub picture: Option<PathBuf>,
+    pub fit: ContentFit,
+    pub title_message: String,
 }
 
 pub struct App<Client>
@@ -58,7 +63,39 @@ where
     view! {
         #[name = "window"]
         gtk::ApplicationWindow {
-            model.auth_ui.widget(),
+            gtk::Overlay {
+                gtk::Picture {
+                    set_filename: picture,
+                    set_content_fit: fit,
+                },
+
+                add_overlay = &gtk::Frame {
+                    set_halign: gtk::Align::Center,
+                    set_valign: gtk::Align::Center,
+                    inline_css: "background-color: @theme_bg_color",
+
+                    gtk::Box {
+                        set_spacing: 15,
+                        set_margin_all: 15,
+                        set_orientation: gtk::Orientation::Vertical,
+
+                        gtk::Label {
+                            set_text: &title_message,
+
+                            #[wrap(Some)]
+                            set_attributes = &gtk::pango::AttrList {
+                                insert: {
+                                    let mut font_desc = gtk::pango::FontDescription::new();
+                                    font_desc.set_weight(gtk::pango::Weight::Bold);
+                                    gtk::pango::AttrFontDesc::new(&font_desc)
+                                },
+                            },
+                        },
+
+                        append = model.auth_ui.widget(),
+                    }
+                },
+            }
         }
     }
 
@@ -75,6 +112,9 @@ where
             initial_user,
             last_user_session_cache,
             greetd_state,
+            picture,
+            fit,
+            title_message,
         } = init;
 
         let auth_ui = AuthUi::builder()
