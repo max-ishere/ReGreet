@@ -1,3 +1,5 @@
+use std::marker::Unpin;
+
 use greetd_ipc::{codec::TokioCodec, AuthMessageType, ErrorType, Request, Response};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::info;
@@ -9,7 +11,8 @@ use super::{
     CreateSessionResponse, Greetd, StartableSession,
 };
 
-pub(crate) trait TokioRW: AsyncReadExt + AsyncWriteExt + std::marker::Unpin + Send {}
+pub(crate) trait TokioRW: AsyncReadExt + AsyncWriteExt + Unpin + Send {}
+impl<T> TokioRW for T where T: AsyncReadExt + AsyncWriteExt + Unpin + Send {}
 
 pub struct AuthMessage<RW>
 where
