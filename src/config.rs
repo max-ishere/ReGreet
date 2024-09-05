@@ -7,12 +7,44 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use relm4::spawn_blocking;
 use serde::{Deserialize, Serialize};
+use tokio::fs::read_to_string;
 
 use crate::{
-    constants::{GREETING_MSG, POWEROFF_CMD, REBOOT_CMD},
-    tomlutils::load_toml,
+    constants::{GREETING_MSG, POWEROFF_CMD, REBOOT_CMD, X11_CMD_PREFIX},
+    error::TomlReadError,
 };
+
+/// The configuration struct
+#[derive(Default, Deserialize, Serialize)]
+pub struct Config {
+    #[serde(default)]
+    pub appearance: AppearanceSettings,
+
+    #[serde(default)]
+    pub background: Background,
+
+    #[serde(default)]
+    pub commands: SystemCommands,
+
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+impl Config {
+    pub async fn load<P>(path: P) -> Result<Self, TomlReadError>
+    where
+        P: AsRef<Path>,
+    {
+        let string = read_to_string(path).await?;
+        let value: Self = spawn_blocking(move || toml::from_str(&string))
+            .await
+            .unwrap()?;
+
+        Ok(value)
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 pub struct AppearanceSettings {
@@ -28,19 +60,13 @@ impl Default for AppearanceSettings {
     }
 }
 
-/// Struct holding all supported GTK settings
+/// Struct for info about the background image
 #[derive(Default, Deserialize, Serialize)]
-pub struct GtkSettings {
+pub struct Background {
     #[serde(default)]
-    pub application_prefer_dark_theme: bool,
+    path: Option<String>,
     #[serde(default)]
-    pub cursor_theme_name: Option<String>,
-    #[serde(default)]
-    pub font_name: Option<String>,
-    #[serde(default)]
-    pub icon_theme_name: Option<String>,
-    #[serde(default)]
-    pub theme_name: Option<String>,
+    fit: BgFit,
 }
 
 /// Analogue to `gtk4::ContentFit`
@@ -53,22 +79,17 @@ pub enum BgFit {
     ScaleDown,
 }
 
-/// Struct for info about the background image
-#[derive(Default, Deserialize, Serialize)]
-pub struct Background {
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default)]
-    fit: BgFit,
-}
-
 /// Struct for reboot/poweroff commands
 #[derive(Deserialize, Serialize)]
 pub struct SystemCommands {
     #[serde(default = "default_reboot_command")]
     pub reboot: Vec<String>,
+
     #[serde(default = "default_poweroff_command")]
     pub poweroff: Vec<String>,
+
+    #[serde(default = "default_x11_command_prefix")]
+    pub x11_prefix: Vec<String>,
 }
 
 impl Default for SystemCommands {
@@ -76,8 +97,13 @@ impl Default for SystemCommands {
         SystemCommands {
             reboot: default_reboot_command(),
             poweroff: default_poweroff_command(),
+            x11_prefix: default_x11_command_prefix(),
         }
     }
+}
+
+fn default_greeting_msg() -> String {
+    GREETING_MSG.to_string()
 }
 
 fn default_reboot_command() -> Vec<String> {
@@ -88,27 +114,6 @@ fn default_poweroff_command() -> Vec<String> {
     shlex::split(POWEROFF_CMD).expect("Unable to lex poweroff command")
 }
 
-fn default_greeting_msg() -> String {
-    GREETING_MSG.to_string()
-}
-
-/// The configuration struct
-#[derive(Default, Deserialize, Serialize)]
-pub struct Config {
-    #[serde(default)]
-    pub appearance: AppearanceSettings,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    #[serde(default)]
-    pub background: Background,
-    #[serde(default, rename = "GTK")]
-    pub gtk: Option<GtkSettings>,
-    #[serde(default)]
-    pub commands: SystemCommands,
-}
-
-impl Config {
-    pub fn new(path: &Path) -> Self {
-        load_toml(path)
-    }
+fn default_x11_command_prefix() -> Vec<String> {
+    shlex::split(X11_CMD_PREFIX).expect("Unable to lex X11 command prefix")
 }

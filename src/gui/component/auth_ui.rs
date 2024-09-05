@@ -22,10 +22,11 @@ pub struct AuthUiInit<Client>
 where
     Client: Greetd,
 {
-    pub initial_user: String,
     pub users: HashMap<String, String>,
     pub sessions: HashMap<String, SessionInfo>,
+    pub env: HashMap<String, String>,
 
+    pub initial_user: String,
     pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
 
     pub greetd_state: GreetdState<Client>,
@@ -100,8 +101,9 @@ where
         let AuthUiInit {
             sessions,
             users,
-            initial_user,
+            env,
 
+            initial_user,
             last_user_session_cache,
 
             greetd_state,
@@ -138,6 +140,11 @@ where
                 text: display,
             })
             .collect();
+
+        let initial_command = sessions
+            .get(&initial_user)
+            .map(|sess| sess.command.clone())
+            .unwrap_or_default();
 
         let user_selector = Selector::builder()
             .launch(SelectorInit {
@@ -185,9 +192,8 @@ where
             .launch(GreetdControlsInit {
                 greetd_state,
                 username: initial_user,
-                // TODO: Use real command and vec.
-                command: Vec::new(),
-                env: Vec::new(),
+                command: initial_command,
+                env: env.into_iter().map(|(k, v)| format!("{k}={v}")).collect(),
             })
             .forward(sender.input_sender(), move |output| {
                 use AuthUiMsg as I;
