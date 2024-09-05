@@ -319,7 +319,6 @@ where
                 GreetdState::NotCreated(_) => gtk::Box {
                     set_halign: gtk::Align::End,
                     #[template] LoginButton {
-                        #[watch]
                         grab_focus: (),
 
                         connect_clicked => GreetdControlsMsg::AdvanceAuthentication,

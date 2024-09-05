@@ -9,6 +9,7 @@ use tracing::error;
 use crate::greetd::Greetd;
 use crate::gui::component::greetd_controls::GreetdControlsInit;
 use crate::gui::component::{GreetdControlsOutput, SelectorInit, SelectorMsg, SelectorOutput};
+use crate::sysutil::SessionInfo;
 
 use super::greetd_controls::{GreetdControls, GreetdState};
 use super::{EntryOrDropDown, GreetdControlsMsg, Selector, SelectorOption};
@@ -23,7 +24,7 @@ where
 {
     pub initial_user: String,
     pub users: HashMap<String, String>,
-    pub sessions: HashMap<String, Vec<String>>,
+    pub sessions: HashMap<String, SessionInfo>,
 
     pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
 
@@ -157,9 +158,9 @@ where
             .launch(SelectorInit {
                 entry_placeholder: "Session command".to_string(),
                 options: sessions
-                    .keys()
-                    .map(|name| SelectorOption {
-                        id: name.clone(),
+                    .iter()
+                    .map(|(xdg_id, SessionInfo { name, .. })| SelectorOption {
+                        id: xdg_id.clone(),
                         text: name.clone(),
                     })
                     .collect(),
@@ -172,7 +173,9 @@ where
                 let SelectorOutput::CurrentSelection(entry) = output;
                 let cmdline = match entry {
                     EntryOrDropDown::Entry(cmdline) => shlex::split(&cmdline),
-                    EntryOrDropDown::DropDown(id) => sessions.get(&id).cloned(),
+                    EntryOrDropDown::DropDown(id) => sessions
+                        .get(&id)
+                        .map(|SessionInfo { command, .. }| command.clone()),
                 };
 
                 Self::Input::SessionChanged(cmdline)
