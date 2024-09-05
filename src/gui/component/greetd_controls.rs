@@ -657,6 +657,7 @@ where
             session: question,
             credential: String::new(),
         },
+        // TODO: For info, mimic what https://github.com/rharish101/ReGreet/pull/4 does.
         R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
     })
 }

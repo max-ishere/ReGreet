@@ -4,9 +4,10 @@
 
 //! Configuration for the greeter
 
-use std::collections::HashMap;
 use std::path::Path;
+use std::{collections::HashMap, path::PathBuf};
 
+use gtk4::ContentFit;
 use relm4::spawn_blocking;
 use serde::{Deserialize, Serialize};
 use tokio::fs::read_to_string;
@@ -20,13 +21,13 @@ use crate::{
 #[derive(Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
-    pub appearance: AppearanceSettings,
+    pub appearance: AppearanceConfig,
 
     #[serde(default)]
-    pub background: Background,
+    pub background: BackgroundConfig,
 
     #[serde(default)]
-    pub commands: SystemCommands,
+    pub commands: SystemCommandsConfig,
 
     #[serde(default)]
     pub env: HashMap<String, String>,
@@ -47,14 +48,14 @@ impl Config {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct AppearanceSettings {
+pub struct AppearanceConfig {
     #[serde(default = "default_greeting_msg")]
     pub greeting_msg: String,
 }
 
-impl Default for AppearanceSettings {
+impl Default for AppearanceConfig {
     fn default() -> Self {
-        AppearanceSettings {
+        AppearanceConfig {
             greeting_msg: default_greeting_msg(),
         }
     }
@@ -62,11 +63,12 @@ impl Default for AppearanceSettings {
 
 /// Struct for info about the background image
 #[derive(Default, Deserialize, Serialize)]
-pub struct Background {
+pub struct BackgroundConfig {
     #[serde(default)]
-    path: Option<String>,
+    pub path: Option<PathBuf>,
+
     #[serde(default)]
-    fit: BgFit,
+    pub fit: BgFit,
 }
 
 /// Analogue to `gtk4::ContentFit`
@@ -79,9 +81,20 @@ pub enum BgFit {
     ScaleDown,
 }
 
+impl From<BgFit> for ContentFit {
+    fn from(value: BgFit) -> Self {
+        match value {
+            BgFit::Fill => Self::Fill,
+            BgFit::Contain => Self::Contain,
+            BgFit::Cover => Self::Cover,
+            BgFit::ScaleDown => Self::ScaleDown,
+        }
+    }
+}
+
 /// Struct for reboot/poweroff commands
 #[derive(Deserialize, Serialize)]
-pub struct SystemCommands {
+pub struct SystemCommandsConfig {
     #[serde(default = "default_reboot_command")]
     pub reboot: Vec<String>,
 
@@ -92,9 +105,9 @@ pub struct SystemCommands {
     pub x11_prefix: Vec<String>,
 }
 
-impl Default for SystemCommands {
+impl Default for SystemCommandsConfig {
     fn default() -> Self {
-        SystemCommands {
+        SystemCommandsConfig {
             reboot: default_reboot_command(),
             poweroff: default_poweroff_command(),
             x11_prefix: default_x11_command_prefix(),
