@@ -65,6 +65,7 @@ where
     type Client = RW;
 }
 
+#[async_trait]
 impl<RW> Greetd for RW
 where
     RW: TokioRW,
@@ -113,6 +114,7 @@ where
     }
 }
 
+#[async_trait]
 impl<RW> StartableSession for RW
 where
     RW: TokioRW,
@@ -148,6 +150,7 @@ where
     }
 }
 
+#[async_trait]
 impl<T> CancellableSession for T
 where
     T: TokioRW,
@@ -176,6 +179,7 @@ where
     }
 }
 
+#[async_trait]
 impl<RW> AuthResponse for AuthMessage<RW>
 where
     RW: TokioRW,
@@ -232,6 +236,7 @@ where
     }
 }
 
+#[async_trait]
 impl<RW> CancellableSession for AuthMessage<RW>
 where
     RW: TokioRW,

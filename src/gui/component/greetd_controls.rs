@@ -1,9 +1,12 @@
-use std::mem::{replace, take};
+use std::{
+    fmt::Debug,
+    mem::{replace, take},
+};
 
 use derivative::Derivative;
 use gtk4::prelude::*;
 use relm4::{
-    component::{AsyncComponentParts, SimpleAsyncComponent},
+    component::{AsyncComponent, AsyncComponentParts},
     prelude::*,
     AsyncComponentSender,
 };
@@ -37,7 +40,8 @@ where
 {
     /// Represents what UI is shown to the user.
     greetd_state: GreetdState<Client>,
-    /// Username to use when creating a new session. When a different username is set by the parent widget, the current session is canceled.
+    /// Username to use when creating a new session. When a different username is set by the parent widget, the current
+    /// session is canceled.
     username: String,
     /// Command to use when starting a session. This is updated by the parent widget.
     command: Option<Vec<String>>,
@@ -45,30 +49,34 @@ where
     env: Vec<String>,
 
     /// A bool to conditionally reset the question inputs.
-    /// Use of tracker::track would not solve the issue because we want to perform a reset after an authentication has succeeded
-    /// or when a session is created.
+    /// Use of tracker::track would not solve the issue because we want to perform a reset only after an authentication
+    /// has succeeded or when a session is created.
     reset_question_inputs_event: bool,
 }
+
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum GreetdState<Client>
 where
     Client: Greetd,
 {
     /// In the UI, shows a single login button. When pressed, uses the username stored to create a session.
-    NotCreated(Client),
+    NotCreated(#[derivative(Debug = "ignore")] Client),
 
     /// The session requires no further authentication and can be started. This looks like an info box with a login button.
-    Startable(Client::StartableSession),
+    Startable(#[derivative(Debug = "ignore")] Client::StartableSession),
 
     /// An auth prompt (either secret or visible)
     AuthQuestion {
         /// Can be used to retrieve the prompt text and it's type.
+        #[derivative(Debug = "ignore")]
         session: Client::AuthQuestion,
         /// The current value of the input that will be sent to greetd when the login button is pressed.
         credential: String,
     },
 
     /// An informative auth prompt from greetd. Looks like an info box with the message type set according to what the prompt is - info or error.
-    AuthInformative(Client::AuthInformative),
+    AuthInformative(#[derivative(Debug = "ignore")] Client::AuthInformative),
 
     /// Used as a placeholder to do 2 things.
     /// 1. Lock the UI while a greetd operation takes place (shows an info box with no buttons).
@@ -132,6 +140,17 @@ pub enum GreetdControlsMsg {
     AdvanceAuthentication,
 }
 
+#[derive(Debug)]
+pub enum CommandOutput<Client>
+where
+    Client: Greetd,
+{
+    GreetdResponse {
+        greetd_state: GreetdState<Client>,
+        error: Option<String>,
+    },
+}
+
 #[relm4::widget_template(pub)]
 impl WidgetTemplate for AuthMessageLabel {
     view! {
@@ -174,13 +193,14 @@ impl WidgetTemplate for LoginButton {
 }
 
 #[relm4::component(pub, async)]
-impl<Client> SimpleAsyncComponent for GreetdControls<Client>
+impl<Client> AsyncComponent for GreetdControls<Client>
 where
-    Client: Greetd + 'static,
+    Client: Greetd + 'static + Debug,
 {
     type Init = GreetdControlsInit<Client>;
     type Input = GreetdControlsMsg;
     type Output = GreetdControlsOutput;
+    type CommandOutput = CommandOutput<Client>;
 
     view! {
         gtk::Box {
@@ -243,7 +263,9 @@ where
                             #[track( model.reset_question_inputs_event )]
                             grab_focus: (),
 
-                            connect_changed[sender] => move |this| sender.input(Self::Input::CredentialChanged(this.text().to_string())),
+                            connect_changed[sender] => move |this| {
+                                sender.input(Self::Input::CredentialChanged(this.text().to_string()))
+                            },
                             connect_activate => Self::Input::AdvanceAuthentication,
                         }
                         AuthQuestion::Visible(prompt) => gtk::Entry {
@@ -256,7 +278,9 @@ where
                             #[track( model.reset_question_inputs_event )]
                             grab_focus: (),
 
-                            connect_changed[sender] => move |this| sender.input(Self::Input::CredentialChanged(this.text().to_string())),
+                            connect_changed[sender] => move |this| {
+                                sender.input(Self::Input::CredentialChanged(this.text().to_string()))
+                            },
                             connect_activate => Self::Input::AdvanceAuthentication,
                         }
                     },
@@ -360,7 +384,12 @@ where
         AsyncComponentParts { model, widgets }
     }
 
-    async fn update(&mut self, message: Self::Input, sender: AsyncComponentSender<Self>) {
+    async fn update(
+        &mut self,
+        message: Self::Input,
+        sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
         self.reset_question_inputs_event = false;
 
         match message {
@@ -392,11 +421,81 @@ where
                 .unwrap();
         }
     }
+
+    async fn update_cmd(
+        &mut self,
+        message: Self::CommandOutput,
+        sender: AsyncComponentSender<Self>,
+        _root: &Self::Root,
+    ) {
+        let CommandOutput::GreetdResponse {
+            greetd_state,
+            error,
+        } = message;
+
+        if let Some(error) = error {
+            error!("Greetd error: {error}");
+            sender
+                .output(GreetdControlsOutput::NotifyError(error))
+                .expect("auth view controller should not be dropped");
+        }
+
+        self.greetd_state = if let GreetdState::Startable(startable) = greetd_state {
+            match &self.command {
+                Some(command) => {
+                    let env = self.env.clone();
+                    let command = command.clone();
+                    sender.oneshot_command(async {
+                        let (greetd_state, error) =
+                            try_start_session(startable, GreetdState::Startable, command, env)
+                                .await;
+
+                        CommandOutput::GreetdResponse {
+                            greetd_state,
+                            error,
+                        }
+                    });
+
+                    GreetdState::Loading("Starting session".to_string())
+                }
+
+                None => {
+                    sender
+                        .output(GreetdControlsOutput::NotifyError(
+                            "Selected session cannot be executed because it is invalid".to_string(),
+                        ))
+                        .expect("auth view controller should not be dropped");
+
+                    GreetdState::Startable(startable)
+                }
+            }
+        } else {
+            greetd_state
+        };
+
+        // self.greetd_state = try_autostart(
+        //     maybe_startable,
+        //     self.command.clone(),
+        //     self.env.clone(),
+        //     sender,
+        // )
+        // .await;
+
+        if let GreetdState::NotCreated(_) = self.greetd_state {
+            sender
+                .output(GreetdControlsOutput::UnlockUserSelectors)
+                .unwrap();
+        } else {
+            sender
+                .output(GreetdControlsOutput::LockUserSelectors)
+                .unwrap();
+        }
+    }
 }
 
 impl<Client> GreetdControls<Client>
 where
-    Client: Greetd,
+    Client: Greetd + 'static + Debug,
 {
     pub async fn cancel_session(&mut self, sender: &AsyncComponentSender<Self>) {
         use GreetdState as S;
@@ -406,27 +505,43 @@ where
             S::Loading(String::from("Canceling session")),
         );
 
-        self.greetd_state = match greetd_state {
-            S::Loading(old) => S::Loading(old),
-            S::NotCreated(client) => GreetdState::NotCreated(client),
+        match greetd_state {
+            S::Loading(old) => self.greetd_state = S::Loading(old),
+            S::NotCreated(client) => self.greetd_state = GreetdState::NotCreated(client),
 
-            S::Startable(client) => report_error(try_cancel(client, S::Startable).await, sender),
+            S::Startable(client) => sender.oneshot_command(async {
+                let (greetd_state, error) = try_cancel(client, S::Startable).await;
+
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
 
             S::AuthQuestion {
                 session,
                 mut credential,
-            } => report_error(
-                try_cancel(session, |session| S::AuthQuestion {
+            } => sender.oneshot_command(async {
+                let (greetd_state, error) = try_cancel(session, move |session| S::AuthQuestion {
                     session,
                     credential: take(&mut credential),
                 })
-                .await,
-                sender,
-            ),
+                .await;
 
-            S::AuthInformative(session) => {
-                report_error(try_cancel(session, S::AuthInformative).await, sender)
-            }
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
+
+            S::AuthInformative(session) => sender.oneshot_command(async {
+                let (greetd_state, error) = try_cancel(session, S::AuthInformative).await;
+
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
         };
     }
 
@@ -435,52 +550,59 @@ where
 
         let greetd_state = replace(
             &mut self.greetd_state,
-            S::Loading(String::from("Canceling session")),
+            S::Loading(String::from("Authenticating")),
         );
 
-        let maybe_startable = match greetd_state {
-            S::Loading(old) => S::Loading(old),
+        match greetd_state {
+            S::Loading(old) => self.greetd_state = S::Loading(old),
+            GreetdState::Startable(startable) => {
+                self.greetd_state = GreetdState::Startable(startable)
+            }
 
-            GreetdState::NotCreated(client) => report_error(
-                try_create_session(client, &self.username, || {
-                    self.reset_question_inputs_event = true
-                })
-                .await,
-                sender,
-            ),
-            GreetdState::Startable(startable) => GreetdState::Startable(startable),
+            GreetdState::NotCreated(client) => {
+                let username = self.username.clone();
+
+                sender.oneshot_command(async {
+                    let (greetd_state, error) = try_create_session(client, username).await;
+
+                    CommandOutput::GreetdResponse {
+                        greetd_state,
+                        error,
+                    }
+                });
+            }
+
             GreetdState::AuthQuestion {
                 session,
-                credential,
-            } => report_error(
-                try_auth(
-                    session,
-                    |session| S::AuthQuestion {
-                        session,
-                        credential: credential.clone(),
-                    },
-                    Some(credential.clone()),
-                    || self.reset_question_inputs_event = true,
-                )
-                .await,
-                sender,
-            ),
-            GreetdState::AuthInformative(informative) => report_error(
-                try_auth(informative, S::AuthInformative, None, || {
-                    self.reset_question_inputs_event = true
-                })
-                .await,
-                sender,
-            ),
-        };
+                mut credential,
+            } => sender.oneshot_command(async {
+                let cred = Some(credential.clone());
 
-        self.greetd_state = try_autostart(
-            maybe_startable,
-            self.command.clone(),
-            self.env.clone(),
-            sender,
-        )
-        .await;
+                let (greetd_state, error) = try_auth(
+                    session,
+                    move |session| S::AuthQuestion {
+                        session,
+                        credential: take(&mut credential),
+                    },
+                    cred,
+                )
+                .await;
+
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
+
+            GreetdState::AuthInformative(informative) => sender.oneshot_command(async {
+                let (greetd_state, error) = try_auth(informative, S::AuthInformative, None).await;
+
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
+        };
     }
 
     async fn change_user(&mut self, username: String) {
@@ -489,18 +611,20 @@ where
         match &self.greetd_state {
             S::NotCreated(_) => self.username = username,
             _user_cannot_be_switched_infallibly => {
-                panic!("The user cannot be switched in this Greetd IPC state.")
+                unreachable!("The user cannot be switched in this Greetd IPC state without a chance of it failing. Please ensure the controls are locked.")
             }
         }
     }
 }
 
+/// If `res` is an error, sends a message using the sender to report the error. In any case assigns the current state to
+/// self.
 fn report_error<Client>(
     res: Result<GreetdState<Client>, (GreetdState<Client>, String)>,
     sender: &AsyncComponentSender<GreetdControls<Client>>,
 ) -> GreetdState<Client>
 where
-    Client: Greetd,
+    Client: Greetd + 'static + Debug,
 {
     match res {
         Ok(state) => state,
@@ -517,10 +641,10 @@ where
 async fn try_cancel<Session>(
     session: Session,
     variant: impl FnOnce(Session) -> GreetdState<<Session as CancellableSession>::Client>,
-) -> Result<
+) -> (
     GreetdState<<Session as CancellableSession>::Client>,
-    (GreetdState<<Session as CancellableSession>::Client>, String),
->
+    Option<String>,
+)
 where
     Session: CancellableSession,
 {
@@ -528,48 +652,47 @@ where
 
     let res = match session.cancel_session().await {
         Ok(res) => res,
-        Err((session, err)) => return Err((variant(session), format!("{}", err))),
+        Err((session, err)) => return (variant(session), Some(format!("IPC error: {}", err))),
     };
 
     match res {
-        Ok(client) => Ok(GreetdState::NotCreated(client)),
-        Err((session, err)) => Err((variant(session), format!("{}", err))),
+        Ok(client) => (GreetdState::NotCreated(client), None),
+        Err((session, err)) => return (variant(session), Some(format!("Reported error: {}", err))),
     }
 }
 
 /// Creates the session but does not start it.
 async fn try_create_session<Client>(
     client: Client,
-    username: &str,
-    on_auth: impl FnOnce(),
-) -> Result<GreetdState<Client>, (GreetdState<Client>, String)>
+    username: String,
+) -> (GreetdState<Client>, Option<String>)
 where
     Client: Greetd,
 {
     debug!("Creating session for user: {username}");
 
-    let res = match client.create_session(username).await {
+    let res = match client.create_session(&username).await {
         Ok(res) => res,
-        Err((client, err)) => return Err((GreetdState::NotCreated(client), format!("{}", err))),
+        Err((client, err)) => return (GreetdState::NotCreated(client), Some(format!("{}", err))),
     };
 
     let session = match res {
         Ok(session) => session,
-        Err((client, err)) => return Err((GreetdState::NotCreated(client), format!("{}", err))),
+        Err((client, err)) => return (GreetdState::NotCreated(client), Some(format!("{}", err))),
     };
 
     use CreateSessionResponse as R;
-    Ok(match session {
-        R::Success(startable) => GreetdState::Startable(startable),
-        R::AuthQuestion(question) => {
-            on_auth();
-            GreetdState::AuthQuestion {
+    (
+        match session {
+            R::Success(startable) => GreetdState::Startable(startable),
+            R::AuthQuestion(question) => GreetdState::AuthQuestion {
                 session: question,
                 credential: String::new(),
-            }
-        }
-        R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
-    })
+            },
+            R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
+        },
+        None,
+    )
 }
 
 async fn try_start_session<Startable>(
@@ -577,10 +700,10 @@ async fn try_start_session<Startable>(
     variant: impl FnOnce(Startable) -> GreetdState<<Startable as StartableSession>::Client>,
     command: Vec<String>,
     env: Vec<String>,
-) -> Result<
+) -> (
     GreetdState<<Startable as StartableSession>::Client>,
-    (GreetdState<<Startable as StartableSession>::Client>, String),
->
+    Option<String>,
+)
 where
     Startable: StartableSession,
 {
@@ -588,41 +711,12 @@ where
 
     let res = match session.start_session(command, env).await {
         Ok(res) => res,
-        Err((startable, err)) => return Err((variant(startable), format!("{}", err))),
+        Err((startable, err)) => return (variant(startable), Some(format!("{}", err))),
     };
 
     match res {
-        Ok(client) => Ok(GreetdState::NotCreated(client)),
-        Err((startable, err)) => Err((variant(startable), format!("{}", err))),
-    }
-}
-
-async fn try_autostart<Client>(
-    state: GreetdState<Client>,
-    command: Option<Vec<String>>,
-    env: Vec<String>,
-    sender: &AsyncComponentSender<GreetdControls<Client>>,
-) -> GreetdState<Client>
-where
-    Client: Greetd,
-{
-    if let GreetdState::Startable(startable) = state {
-        let Some(command) = command else {
-            sender
-                .output(GreetdControlsOutput::NotifyError(
-                    "Selected session cannot be executed because it is invalid".to_string(),
-                ))
-                .expect("auth view controller should not be dropped");
-
-            return GreetdState::Startable(startable);
-        };
-
-        report_error(
-            try_start_session(startable, GreetdState::<Client>::Startable, command, env).await,
-            sender,
-        )
-    } else {
-        state
+        Ok(client) => (GreetdState::NotCreated(client), None),
+        Err((startable, err)) => return (variant(startable), Some(format!("{}", err))),
     }
 }
 
@@ -630,34 +724,34 @@ async fn try_auth<Message>(
     message: Message,
     variant: impl FnOnce(Message) -> GreetdState<<Message as AuthResponse>::Client>,
     credential: Option<String>,
-    on_success: impl FnOnce(),
-) -> Result<
+) -> (
     GreetdState<<Message as AuthResponse>::Client>,
-    (GreetdState<<Message as AuthResponse>::Client>, String),
->
+    Option<String>,
+)
 where
     Message: AuthResponse,
 {
-    let res = match message.respond(credential).await {
+    let res = match message.respond(dbg!(credential)).await {
         Ok(res) => res,
-        Err((message, err)) => return Err((variant(message), format!("{}", err))),
+        Err((message, err)) => return (variant(message), Some(format!("{}", err))),
     };
 
     let session = match res {
         Ok(session) => session,
-        Err((message, err)) => return Err((variant(message), format!("{}", err))),
+        Err((message, err)) => return (variant(message), Some(format!("{}", err))),
     };
 
-    on_success();
-
     use CreateSessionResponse as R;
-    Ok(match session {
-        R::Success(startable) => GreetdState::Startable(startable),
-        R::AuthQuestion(question) => GreetdState::AuthQuestion {
-            session: question,
-            credential: String::new(),
+    (
+        match session {
+            R::Success(startable) => GreetdState::Startable(startable),
+            R::AuthQuestion(question) => GreetdState::AuthQuestion {
+                session: question,
+                credential: String::new(),
+            },
+            // TODO: For info, mimic what https://github.com/rharish101/ReGreet/pull/4 does.
+            R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
         },
-        // TODO: For info, mimic what https://github.com/rharish101/ReGreet/pull/4 does.
-        R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
-    })
+        None,
+    )
 }

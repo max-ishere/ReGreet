@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 use derivative::Derivative;
 use gtk4::prelude::*;
@@ -34,7 +35,7 @@ where
 
 pub struct AuthUi<Client>
 where
-    Client: Greetd + 'static,
+    Client: Greetd + 'static + Debug,
 {
     last_user_session_cache: HashMap<String, EntryOrDropDown>,
 
@@ -63,7 +64,7 @@ pub enum AuthUiMsg {
 #[relm4::component(pub)]
 impl<Client> SimpleComponent for AuthUi<Client>
 where
-    Client: Greetd + 'static,
+    Client: Greetd + 'static + Debug,
 {
     type Init = AuthUiInit<Client>;
     type Input = AuthUiMsg;

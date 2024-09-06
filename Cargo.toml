@@ -15,6 +15,7 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 async-recursion = "1.1.1"
+async-trait = "0.1.82"
 clap = { version = "4.1.4", features = ["derive"] }
 const_format = "0.2.26"
 derivative = "2.2.0"
