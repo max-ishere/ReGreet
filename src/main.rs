@@ -36,6 +36,8 @@ use crate::constants::{APP_ID, CONFIG_PATH, LOG_PATH};
 
 #[macro_use]
 extern crate async_recursion;
+#[macro_use]
+extern crate async_trait;
 
 #[cfg(test)]
 #[macro_use]
@@ -89,11 +91,17 @@ fn main() {
     // Keep the guard alive till the end of the function, since logging depends on this.
     let _guard = init_logging(&logs, &log_level, verbose);
 
-    let (cache, mut config, users) = tokio::runtime::Builder::new_multi_thread()
+    // We cannot use #[tokio::main] because init_logging uses OffsetTime, which requires it be init'd before tokio or
+    // threads are created.
+    tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(load_files(config));
+        .block_on(async_main(config, demo));
+}
+
+async fn async_main(config: PathBuf, demo: bool) {
+    let (cache, mut config, users) = load_files(config).await;
 
     let app = relm4::RelmApp::new(APP_ID);
 
@@ -113,12 +121,7 @@ fn main() {
 
     let socket_path = env::var("GREETD_SOCK").unwrap();
 
-    let socket = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(UnixStream::connect(socket_path))
-        .unwrap();
+    let socket = UnixStream::connect(socket_path).await.unwrap();
 
     let greetd_state = GreetdState::NotCreated(socket);
 

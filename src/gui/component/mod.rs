@@ -4,7 +4,7 @@
 
 //! Setup for using the greeter as a Relm4 component
 
-use std::{collections::HashMap, path::PathBuf, process::Command};
+use std::{collections::HashMap, fmt::Debug, path::PathBuf, process::Command};
 
 use crate::{greetd::Greetd, sysutil::SessionInfo};
 use action_button::{ActionButton, ActionButtonInit, ActionButtonOutput};
@@ -48,7 +48,7 @@ where
 
 pub struct App<Client>
 where
-    Client: Greetd + 'static,
+    Client: Greetd + 'static + Debug,
 {
     reboot_cmd: Vec<String>,
     poweroff_cmd: Vec<String>,
@@ -70,7 +70,7 @@ pub enum AppMsg {
 #[relm4::component(pub)]
 impl<Client> SimpleComponent for App<Client>
 where
-    Client: Greetd,
+    Client: Greetd + Debug,
 {
     type Input = AppMsg;
     type Output = ();
@@ -213,7 +213,7 @@ where
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
         match message {
             AppMsg::Reconnect => todo!(),
             AppMsg::Reboot => exec(&self.reboot_cmd),

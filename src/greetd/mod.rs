@@ -7,12 +7,19 @@ mod async_sock_impl;
 #[doc(hidden)]
 mod mock;
 
+/// The types go like this:
+/// 1. The client so it's error can be used as the outter result's Err
+/// 2. The current type if the interaction fails (always `Self` basically). Present as `.0` in both variants `Err` so
+///    that the interaction can be retried.
+/// 3. The next type if the interaction succeeds (the `Ok(Ok(Next))` case).
 type Response<Client, Current, Next> =
     Result<Result<Next, (Current, RequestError)>, (Current, <Client as Greetd>::Error)>;
 
 // Requests
 
-pub trait Greetd: Sized
+// TODO: Rewrite all traits as impl Future + Send instead of #[async_send]
+#[async_trait]
+pub trait Greetd: Sized + Send
 where
     Self::StartableSession: CancellableSession<Client = Self>,
     Self::StartableSession: StartableSession<Client = Self>,
@@ -37,6 +44,7 @@ where
     ) -> Response<Self, Self, CreateSessionResponse<Self>>;
 }
 
+#[async_trait]
 pub trait AuthResponse: CancellableSession + Sized {
     type Client: Greetd;
 
@@ -51,7 +59,8 @@ pub trait AuthResponse: CancellableSession + Sized {
     >;
 }
 
-pub trait AuthQuestionResponse: CancellableSession + AuthResponse {
+#[async_trait]
+pub trait AuthQuestionResponse: AuthResponse {
     type Client: Greetd;
 
     fn auth_question(&self) -> AuthQuestion {
@@ -65,7 +74,8 @@ pub trait AuthQuestionResponse: CancellableSession + AuthResponse {
     }
 }
 
-pub trait AuthInformativeResponse: CancellableSession + AuthResponse {
+#[async_trait]
+pub trait AuthInformativeResponse: AuthResponse {
     type Client: Greetd;
 
     fn auth_informative(&self) -> AuthInformative<'_> {
@@ -79,7 +89,8 @@ pub trait AuthInformativeResponse: CancellableSession + AuthResponse {
     }
 }
 
-pub trait StartableSession: CancellableSession {
+#[async_trait]
+pub trait StartableSession: CancellableSession + Send {
     type Client: Greetd;
 
     async fn start_session(
@@ -89,7 +100,8 @@ pub trait StartableSession: CancellableSession {
     ) -> Response<<Self as StartableSession>::Client, Self, <Self as StartableSession>::Client>;
 }
 
-pub trait CancellableSession: Sized {
+#[async_trait]
+pub trait CancellableSession: Sized + Send {
     type Client: Greetd;
 
     async fn cancel_session(

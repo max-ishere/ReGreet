@@ -7,8 +7,10 @@ use super::{
     Greetd, StartableSession,
 };
 
+#[derive(Debug)]
 pub struct MockGreetd {}
 
+#[async_trait]
 impl Greetd for MockGreetd {
     type StartableSession = Self;
 
@@ -26,6 +28,7 @@ impl Greetd for MockGreetd {
     }
 }
 
+#[async_trait]
 impl CancellableSession for MockGreetd {
     type Client = Self;
 
@@ -36,6 +39,7 @@ impl CancellableSession for MockGreetd {
     }
 }
 
+#[async_trait]
 impl AuthResponse for MockGreetd {
     type Client = Self;
 
@@ -63,6 +67,7 @@ impl AuthInformativeResponse for MockGreetd {
     type Client = Self;
 }
 
+#[async_trait]
 impl StartableSession for MockGreetd {
     type Client = Self;
 
