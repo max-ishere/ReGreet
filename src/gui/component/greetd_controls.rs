@@ -5,11 +5,7 @@ use std::{
 
 use derivative::Derivative;
 use gtk4::prelude::*;
-use relm4::{
-    component::{AsyncComponent, AsyncComponentParts},
-    prelude::*,
-    AsyncComponentSender,
-};
+use relm4::prelude::*;
 use tracing::{debug, error};
 
 use crate::greetd::{
@@ -192,8 +188,8 @@ impl WidgetTemplate for LoginButton {
     }
 }
 
-#[relm4::component(pub, async)]
-impl<Client> AsyncComponent for GreetdControls<Client>
+#[relm4::component(pub)]
+impl<Client> Component for GreetdControls<Client>
 where
     Client: Greetd + 'static + Debug,
 {
@@ -353,11 +349,11 @@ where
         }
     }
 
-    async fn init(
+    fn init(
         init: Self::Init,
-        root: Self::Root,
-        sender: AsyncComponentSender<Self>,
-    ) -> AsyncComponentParts<Self> {
+        root: &Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
         let GreetdControlsInit {
             greetd_state,
             username,
@@ -381,15 +377,10 @@ where
         widgets.auth_conditional.set_vhomogeneous(false);
         widgets.auth_conditional.set_interpolate_size(true);
 
-        AsyncComponentParts { model, widgets }
+        ComponentParts { model, widgets }
     }
 
-    async fn update(
-        &mut self,
-        message: Self::Input,
-        sender: AsyncComponentSender<Self>,
-        _root: &Self::Root,
-    ) {
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         self.reset_question_inputs_event = false;
 
         match message {
@@ -401,10 +392,10 @@ where
                     *credential = new_cred;
                 }
             }
-            GreetdControlsMsg::Cancel => self.cancel_session(&sender).await,
-            GreetdControlsMsg::AdvanceAuthentication => self.advance_authentication(&sender).await,
+            GreetdControlsMsg::Cancel => self.cancel_session(&sender),
+            GreetdControlsMsg::AdvanceAuthentication => self.advance_authentication(&sender),
 
-            GreetdControlsMsg::UpdateUser(username) => self.change_user(username).await,
+            GreetdControlsMsg::UpdateUser(username) => self.change_user(username),
 
             GreetdControlsMsg::UpdateSession(command) => {
                 self.command = command;
@@ -422,10 +413,10 @@ where
         }
     }
 
-    async fn update_cmd(
+    fn update_cmd(
         &mut self,
         message: Self::CommandOutput,
-        sender: AsyncComponentSender<Self>,
+        sender: ComponentSender<Self>,
         _root: &Self::Root,
     ) {
         let CommandOutput::GreetdResponse {
@@ -473,14 +464,6 @@ where
             greetd_state
         };
 
-        // self.greetd_state = try_autostart(
-        //     maybe_startable,
-        //     self.command.clone(),
-        //     self.env.clone(),
-        //     sender,
-        // )
-        // .await;
-
         if let GreetdState::NotCreated(_) = self.greetd_state {
             sender
                 .output(GreetdControlsOutput::UnlockUserSelectors)
@@ -497,7 +480,7 @@ impl<Client> GreetdControls<Client>
 where
     Client: Greetd + 'static + Debug,
 {
-    pub async fn cancel_session(&mut self, sender: &AsyncComponentSender<Self>) {
+    pub fn cancel_session(&mut self, sender: &ComponentSender<Self>) {
         use GreetdState as S;
 
         let greetd_state = replace(
@@ -545,7 +528,7 @@ where
         };
     }
 
-    async fn advance_authentication(&mut self, sender: &AsyncComponentSender<Self>) {
+    fn advance_authentication(&mut self, sender: &ComponentSender<Self>) {
         use GreetdState as S;
 
         let greetd_state = replace(
@@ -605,7 +588,7 @@ where
         };
     }
 
-    async fn change_user(&mut self, username: String) {
+    fn change_user(&mut self, username: String) {
         use GreetdState as S;
 
         match &self.greetd_state {
@@ -613,27 +596,6 @@ where
             _user_cannot_be_switched_infallibly => {
                 unreachable!("The user cannot be switched in this Greetd IPC state without a chance of it failing. Please ensure the controls are locked.")
             }
-        }
-    }
-}
-
-/// If `res` is an error, sends a message using the sender to report the error. In any case assigns the current state to
-/// self.
-fn report_error<Client>(
-    res: Result<GreetdState<Client>, (GreetdState<Client>, String)>,
-    sender: &AsyncComponentSender<GreetdControls<Client>>,
-) -> GreetdState<Client>
-where
-    Client: Greetd + 'static + Debug,
-{
-    match res {
-        Ok(state) => state,
-        Err((state, err)) => {
-            error!("Greetd error: {err}");
-            sender
-                .output(GreetdControlsOutput::NotifyError(err))
-                .expect("auth view controller should not be dropped");
-            state
         }
     }
 }

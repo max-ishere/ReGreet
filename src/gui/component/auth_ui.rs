@@ -3,7 +3,6 @@ use std::fmt::Debug;
 
 use derivative::Derivative;
 use gtk4::prelude::*;
-use relm4::component::{AsyncComponent as _, AsyncComponentController as _, AsyncController};
 use relm4::prelude::*;
 use tracing::error;
 
@@ -44,7 +43,7 @@ where
     #[doc(hidden)]
     session_selector: Controller<Selector>,
     #[doc(hidden)]
-    auth_view: AsyncController<GreetdControls<Client>>,
+    auth_view: Controller<GreetdControls<Client>>,
 }
 
 #[derive(Debug)]
