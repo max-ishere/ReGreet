@@ -188,7 +188,7 @@ where
         .user_to_last_sess
         .into_iter()
         .filter_map(|(username, session)| match session {
-            SessionIdOrCmdline::ID(id) => sessions
+            SessionIdOrCmdline::XdgDektopFile(id) => sessions
                 .contains_key(&id)
                 .then_some((username, EntryOrDropDown::DropDown(id))),
 

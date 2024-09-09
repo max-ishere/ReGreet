@@ -24,8 +24,8 @@ pub struct Cache {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionIdOrCmdline {
-    #[serde(rename = "sid")] // Cannot use id because serde renames it, s is for session.
-    ID(String),
+    #[serde(rename = "xdg")] // Cannot use id because serde renames it, s is for session.
+    XdgDektopFile(String),
 
     #[serde(rename = "cmd")]
     Command(String),
