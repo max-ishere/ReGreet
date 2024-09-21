@@ -1172,7 +1172,6 @@ name = "regreet"
 version = "0.1.1"
 dependencies = [
  "async-recursion",
- "async-trait",
  "clap",
  "const_format",
  "derivative",

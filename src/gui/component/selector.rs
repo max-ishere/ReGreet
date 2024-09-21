@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use gtk4::prelude::*;
-use relm4::prelude::*;
+use relm4::{gtk::prelude::*, prelude::*};
 
 #[derive(Debug)]
 pub struct SelectorInit {
@@ -187,7 +186,10 @@ impl SimpleComponent for Selector {
         let (last_entry, last_option_id) = match &selection {
             EntryOrDropDown::Entry(entry) => (
                 entry.clone(),
-                options.get(0).map(|opt| opt.id.clone()).unwrap_or_default(),
+                options
+                    .first()
+                    .map(|opt| opt.id.clone())
+                    .unwrap_or_default(),
             ),
             EntryOrDropDown::DropDown(id) => (String::new(), id.clone()),
         };

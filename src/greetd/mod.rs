@@ -45,6 +45,8 @@
 //!   - [`Err`]: Current state + error reported by greetd
 //!   - [`Ok`]: Everything ok, contains the new state.
 
+#![allow(clippy::manual_async_fn)]
+
 use std::fmt::{Debug, Display};
 
 use thiserror::Error;
@@ -72,17 +74,17 @@ type Response<Client, Current, Next> =
 /// # Usage
 ///
 /// ```rust
-/// # use regreet::greetd_ipc_call;
+/// # use regreet::greetd_response;
 /// # type TypeOnSuccess = ();
 /// #
-/// fn foo() -> greetd_ipc_call!(Client, TypeOnSuccess) {
+/// fn foo() -> greetd_response!(Client, TypeOnSuccess) {
 ///     async { Ok(Ok(TypeOnSuccess)) }
 /// }
 /// ```
 #[macro_export]
 macro_rules! greetd_response {
     ($client:ty, $next:ty) => {
-        impl std::future::Future<Output = crate::greetd::Response<$client, Self, $next>> + std::marker::Send
+        impl std::future::Future<Output = $crate::greetd::Response<$client, Self, $next>> + std::marker::Send
     };
 }
 

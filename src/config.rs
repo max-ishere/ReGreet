@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::{collections::HashMap, path::PathBuf};
 
-use gtk4::ContentFit;
+use relm4::gtk::ContentFit;
 use relm4::spawn_blocking;
 use serde::{Deserialize, Serialize};
 use tokio::fs::read_to_string;
