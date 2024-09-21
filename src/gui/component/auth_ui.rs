@@ -2,17 +2,16 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use derivative::Derivative;
-use gtk4::prelude::*;
-use relm4::prelude::*;
+use relm4::{gtk::prelude::*, prelude::*};
 use tracing::error;
 
 use crate::greetd::Greetd;
-use crate::gui::component::greetd_controls::GreetdControlsInit;
-use crate::gui::component::{GreetdControlsOutput, SelectorInit, SelectorMsg, SelectorOutput};
 use crate::sysutil::SessionInfo;
 
-use super::greetd_controls::{GreetdControls, GreetdState};
-use super::{EntryOrDropDown, GreetdControlsMsg, Selector, SelectorOption};
+use super::{
+    EntryOrDropDown, GreetdControls, GreetdControlsInit, GreetdControlsMsg, GreetdControlsOutput,
+    GreetdState, Selector, SelectorInit, SelectorMsg, SelectorOption, SelectorOutput,
+};
 
 const USER_ROW: i32 = 0;
 const SESSION_ROW: i32 = 1;

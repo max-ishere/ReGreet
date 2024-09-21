@@ -4,8 +4,7 @@ use std::{
 };
 
 use derivative::Derivative;
-use gtk4::prelude::*;
-use relm4::prelude::*;
+use relm4::{gtk::prelude::*, prelude::*};
 use tracing::{debug, error};
 
 use crate::greetd::{
@@ -619,7 +618,7 @@ where
 
     match res {
         Ok(client) => (GreetdState::NotCreated(client), None),
-        Err((session, err)) => return (variant(session), Some(format!("Reported error: {}", err))),
+        Err((session, err)) => (variant(session), Some(format!("Reported error: {}", err))),
     }
 }
 
@@ -678,7 +677,7 @@ where
 
     match res {
         Ok(client) => (GreetdState::NotCreated(client), None),
-        Err((startable, err)) => return (variant(startable), Some(format!("{}", err))),
+        Err((startable, err)) => (variant(startable), Some(format!("{}", err))),
     }
 }
 

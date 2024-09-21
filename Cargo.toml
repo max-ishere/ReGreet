@@ -15,7 +15,6 @@ license = "GPL-3.0-or-later"
 
 [dependencies]
 async-recursion = "1.1.1"
-async-trait = "0.1.82"
 clap = { version = "4.1.4", features = ["derive"] }
 const_format = "0.2.26"
 derivative = "2.2.0"
@@ -34,7 +33,6 @@ toml = "0.6.0"
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["local-time"] }
-
 
 [dev-dependencies]
 test-case = "3.3.1"

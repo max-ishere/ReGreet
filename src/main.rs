@@ -21,7 +21,7 @@ use clap::{Parser, ValueEnum};
 use config::{AppearanceConfig, BackgroundConfig, Config, SystemCommandsConfig};
 use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
-use greetd::{Greetd, MockGreetd};
+use greetd::{DemoGreetd, Greetd};
 use gui::component::{App, AppInit, EntryOrDropDown, GreetdState};
 use sysutil::SystemUsersAndSessions;
 use tokio::net::UnixStream;
@@ -36,8 +36,6 @@ use crate::constants::{APP_ID, CONFIG_PATH, LOG_PATH};
 
 #[macro_use]
 extern crate async_recursion;
-#[macro_use]
-extern crate async_trait;
 
 #[cfg(test)]
 #[macro_use]
@@ -110,11 +108,11 @@ async fn async_main(config: PathBuf, demo: bool) {
         config.commands.poweroff = vec![];
 
         let greetd_state = GreetdState::AuthQuestion {
-            session: MockGreetd {},
+            session: DemoGreetd {},
             credential: String::new(),
         };
 
-        app.run::<App<MockGreetd>>(mk_app_init(greetd_state, cache, users, config));
+        app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config));
 
         return;
     }
