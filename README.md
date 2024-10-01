@@ -243,6 +243,54 @@ pre-commit install
 Now, pre-commit should ensure that the code passes all linters locally before committing.
 This will save time when creating PRs, since these linters also run in CI, and thus fail code that hasn't been linted well.
 
+### `cargo fakegreet` subcommand
+`fakegreet` is an alternative to demo mode for testing the greeter with a fake wrapper that acts like `greetd`.
+`fakegreet` is shipped with `greetd` by default. Normally you would have to run
+
+```sh
+fakegreet 'cargo run'
+```
+
+This project ships an extension for cargo in the examples directory. This subcommand, `cargo fakegreet` works exactly
+like `cargo run` (or at least is supposed to do that), except it wraps the executable in `fakegreet`. You
+can pass options to both `cargo run` and `regreet` the same way you would if you were to use `cargo run` directly.
+
+```sh
+cargo fakegreet --bin regreet -- -c regreet.sample.toml
+```
+
+The subcommand will perform cleanup on exit (such as deleting the socket file).
+
+Install it via `cargo` to your user's `~/.cargo/bin`
+
+```sh
+cargo install --path . --example cargo-fakegreet
+```
+
+To uninstall run
+
+```sh
+cargo uninstall --bin cargo-fakegreet
+```
+
+Or run the example directly (useful when updating the subcommand)
+
+```sh
+cargo run --example cargo-fakegreet
+```
+
+Once installed use it like this
+
+```sh
+cargo fakegreet
+```
+
+For help run
+
+```sh
+cargo fakegreet --help
+```
+
 ### Demo mode
 To aid development, a "demo" mode is included within ReGreet that runs ReGreet independent of greetd.
 Simply run ReGreet as follows:
