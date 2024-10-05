@@ -57,14 +57,11 @@ where
 
     auth_ui: Controller<AuthUi<Client>>,
 
-    reconnect_btn: Controller<ActionButton>,
-    reboot_btn: Controller<ActionButton>,
-    poweroff_btn: Controller<ActionButton>,
+    action_buttons: Vec<Controller<ActionButton>>,
 }
 
 #[derive(Debug)]
 pub enum AppMsg {
-    Reconnect,
     Reboot,
     Poweroff,
 }
@@ -98,10 +95,8 @@ where
                         set_spacing: 20,
                         set_margin_all: 15,
 
-                        append = model.reboot_btn.widget(),
-                        append = model.poweroff_btn.widget(),
-                        append = &gtk::Separator,
-                        append = model.reconnect_btn.widget(),
+                        #[iterate]
+                        append: model.action_buttons.iter().map(Controller::widget),
                     }
                 },
 
@@ -166,18 +161,6 @@ where
             })
             .detach();
 
-        let reconnect_btn = ActionButton::builder()
-            .launch(ActionButtonInit {
-                label: Some("Reload".to_string()),
-                icon: "view-refresh".to_string(),
-                tooltip: Some("Reconnect to greetd".to_string()),
-                css_classes: vec![],
-            })
-            .forward(
-                sender.input_sender(),
-                move |ActionButtonOutput: ActionButtonOutput| AppMsg::Reconnect,
-            );
-
         let reboot_btn = ActionButton::builder()
             .launch(ActionButtonInit {
                 label: Some("Reboot".to_string()),
@@ -206,9 +189,7 @@ where
             reboot_cmd,
             poweroff_cmd,
             auth_ui,
-            reconnect_btn,
-            reboot_btn,
-            poweroff_btn,
+            action_buttons: vec![reboot_btn, poweroff_btn],
         };
         let widgets = view_output!();
 
@@ -217,7 +198,6 @@ where
 
     fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
         match message {
-            AppMsg::Reconnect => todo!(),
             AppMsg::Reboot => exec(&self.reboot_cmd),
             AppMsg::Poweroff => exec(&self.poweroff_cmd),
         }
