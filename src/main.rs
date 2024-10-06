@@ -22,11 +22,14 @@ use config::{AppearanceConfig, BackgroundConfig, Config, SystemCommandsConfig};
 use constants::CACHE_PATH;
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use greetd::{DemoGreetd, Greetd};
-use gui::component::{App, AppInit, EntryOrDropDown, GreetdState};
+use gtk4::glib::markup_escape_text;
+use gtk4::MessageType;
+use gui::component::{App, AppInit, EntryOrDropDown, GreetdState, NotificationItemInit};
+use relm4::RelmApp;
 use sysutil::SystemUsersAndSessions;
 use tokio::net::UnixStream;
 use tracing::subscriber::set_global_default;
-use tracing::warn;
+use tracing::{error, warn};
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
 use tracing_subscriber::{
     filter::LevelFilter, fmt::layer, fmt::time::OffsetTime, layer::SubscriberExt,
@@ -87,7 +90,7 @@ fn main() {
         demo,
     } = Args::parse();
     // Keep the guard alive till the end of the function, since logging depends on this.
-    let _guard = init_logging(&logs, &log_level, verbose);
+    let (_guard, errors) = init_logging(&logs, &log_level, verbose);
 
     // We cannot use #[tokio::main] because init_logging uses OffsetTime, which requires it be init'd before tokio or
     // threads are created.
@@ -95,13 +98,14 @@ fn main() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async_main(config, demo));
+        .block_on(async_main(config, demo, errors));
 }
 
-async fn async_main(config: PathBuf, demo: bool) {
-    let (cache, mut config, users) = load_files(config).await;
+async fn async_main(config: PathBuf, demo: bool, mut errors: Vec<NotificationItemInit>) {
+    let (cache, mut config, users, new_errors) = load_files(config).await;
+    errors.extend(new_errors);
 
-    let app = relm4::RelmApp::new(APP_ID);
+    let app = RelmApp::new(APP_ID);
 
     if demo {
         config.commands.reboot = vec![];
@@ -112,7 +116,7 @@ async fn async_main(config: PathBuf, demo: bool) {
             credential: String::new(),
         };
 
-        app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config));
+        app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config, errors));
 
         return;
     }
@@ -123,33 +127,60 @@ async fn async_main(config: PathBuf, demo: bool) {
 
     let greetd_state = GreetdState::NotCreated(socket);
 
-    app.run::<App<UnixStream>>(mk_app_init(greetd_state, cache, users, config));
+    app.run::<App<UnixStream>>(mk_app_init(greetd_state, cache, users, config, errors));
 }
 
-async fn load_files<P>(config: P) -> (Cache, Config, SystemUsersAndSessions)
+async fn load_files<P>(
+    config: P,
+) -> (
+    Cache,
+    Config,
+    SystemUsersAndSessions,
+    Vec<NotificationItemInit>,
+)
 where
     P: AsRef<Path>,
 {
+    let mut errors = vec![];
+
     let (cache, config) = tokio::join!(Cache::load(CACHE_PATH), Config::load(config),);
 
     let cache = cache.unwrap_or_else(|err| {
-        warn!("Failed to load the cache, starting without it: {err}");
+        let warning = format!("Failed to load the cache, starting without it: {err}");
+        warn!(warning);
+        errors.push(NotificationItemInit {
+            markup_text: markup_escape_text(&warning).to_string(),
+            message_type: MessageType::Warning,
+        });
+
         Cache::default()
     });
 
     let config = config.unwrap_or_else(|err| {
-        warn!("Failed to load the config file, starting with the defaults: {err}");
+        let warning = format!("Failed to load the config file, starting with the defaults: {err}");
+        warn!(warning);
+        errors.push(NotificationItemInit {
+            markup_text: markup_escape_text(&warning).to_string(),
+            message_type: MessageType::Warning,
+        });
+
         Config::default()
     });
 
     let users = SystemUsersAndSessions::load(&config.commands.x11_prefix)
         .await
         .unwrap_or_else(|err| {
-            warn!("Failed to the list of users and sessions on this system, starting with no options: {err}");
+            let warning = format!("Failed to the list of users and sessions on this system, starting with no options: {err}");
+            warn!(warning);
+            errors.push(NotificationItemInit {
+                markup_text: markup_escape_text(&warning).to_string(),
+                message_type: MessageType::Warning,
+            });
+
             SystemUsersAndSessions::default()
         });
 
-    (cache, config, users)
+    (cache, config, users, errors)
 }
 
 fn mk_app_init<Client>(
@@ -157,6 +188,7 @@ fn mk_app_init<Client>(
     cache: Cache,
     users: SystemUsersAndSessions,
     config: Config,
+    errors: Vec<NotificationItemInit>,
 ) -> AppInit<Client>
 where
     Client: Greetd,
@@ -217,6 +249,8 @@ where
         title_message: greeting_msg,
         reboot_cmd: reboot,
         poweroff_cmd: poweroff,
+
+        notifications: errors,
     }
 }
 
@@ -246,7 +280,13 @@ fn setup_log_file(log_path: &Path) -> IoResult<FileRotate<AppendCount>> {
 }
 
 /// Initialize logging with file rotation.
-fn init_logging(log_path: &Path, log_level: &LogLevel, stdout: bool) -> Vec<WorkerGuard> {
+fn init_logging(
+    log_path: &Path,
+    log_level: &LogLevel,
+    stdout: bool,
+) -> (Vec<WorkerGuard>, Vec<NotificationItemInit>) {
+    let mut errors = vec![];
+
     // Parse the log level string.
     let filter = match log_level {
         LogLevel::Off => LevelFilter::OFF,
@@ -292,7 +332,13 @@ fn init_logging(log_path: &Path, log_level: &LogLevel, stdout: bool) -> Vec<Work
             let (file, guard) = non_blocking(std::io::stdout());
             guards.push(guard);
             builder.with_writer(file).init();
-            tracing::error!("Couldn't create log file '{LOG_PATH}': {file_err}");
+
+            let error = format!("Couldn't create log file '{LOG_PATH}': {file_err}");
+            error!(error);
+            errors.push(NotificationItemInit {
+                markup_text: markup_escape_text(&error).to_string(),
+                message_type: MessageType::Error,
+            })
         }
     };
 
@@ -302,5 +348,5 @@ fn init_logging(log_path: &Path, log_level: &LogLevel, stdout: bool) -> Vec<Work
         eprintln!("{panic}");
     }));
 
-    guards
+    (guards, errors)
 }
