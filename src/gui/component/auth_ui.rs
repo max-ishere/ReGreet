@@ -46,7 +46,9 @@ where
 }
 
 #[derive(Debug)]
-pub enum AuthUiOutput {}
+pub enum AuthUiOutput {
+    ShowError(String),
+}
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -216,7 +218,7 @@ where
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         use AuthUiMsg as I;
         match message {
             I::UserChanged(entry) => {
@@ -242,7 +244,11 @@ where
             I::LockUserSelectors => self.user_selector.emit(SelectorMsg::Lock),
             I::UnlockUserSelectors => self.user_selector.emit(SelectorMsg::Unlock),
 
-            I::ShowError(error) => error!("{error}"), // TODO: Show an error
+            I::ShowError(error) => {
+                error!("ShowError messsage: {error}");
+
+                sender.output(AuthUiOutput::ShowError(error)).unwrap();
+            }
         }
     }
 }

@@ -6,21 +6,27 @@
 
 use std::{collections::HashMap, fmt::Debug, path::PathBuf, process::Command};
 
-use crate::{greetd::Greetd, sysutil::SessionInfo};
 use relm4::{
     gtk::{prelude::*, ContentFit},
     prelude::*,
 };
-
-pub use action_button::*;
-pub use auth_ui::*;
-pub use greetd_controls::*;
-pub use selector::*;
 use tracing::{debug, error, info};
+
+use crate::{greetd::Greetd, sysutil::SessionInfo};
+use action_button::*;
+use auth_ui::*;
+pub use greetd_controls::GreetdState;
+use greetd_controls::*;
+pub use notification_item::NotificationItemInit;
+use notification_list::{NotificationList, NotificationListMsg};
+pub use selector::EntryOrDropDown;
+use selector::*;
 
 mod action_button;
 mod auth_ui;
 mod greetd_controls;
+mod notification_item;
+mod notification_list;
 mod selector;
 
 // TODO: Add a notification column component to display multiple errors. Then display different things like warnings ...
@@ -46,6 +52,8 @@ where
 
     pub reboot_cmd: Vec<String>,
     pub poweroff_cmd: Vec<String>,
+
+    pub notifications: Vec<NotificationItemInit>,
 }
 
 pub struct App<Client>
@@ -56,8 +64,8 @@ where
     poweroff_cmd: Vec<String>,
 
     auth_ui: Controller<AuthUi<Client>>,
-
     action_buttons: Vec<Controller<ActionButton>>,
+    notifications: Controller<NotificationList>,
 }
 
 #[derive(Debug)]
@@ -126,6 +134,16 @@ where
                         append = model.auth_ui.widget(),
                     }
                 },
+
+                add_overlay = model.notifications.widget() {
+                    set_halign: gtk::Align::End,
+                    set_valign: gtk::Align::Fill,
+
+                    set_margin_all: 15,
+
+                    set_propagate_natural_width: true,
+                    set_propagate_natural_height: true,
+                },
             }
         }
     }
@@ -148,7 +166,10 @@ where
             title_message,
             reboot_cmd,
             poweroff_cmd,
+            notifications,
         } = init;
+
+        let notifications = NotificationList::builder().launch(notifications).detach();
 
         let auth_ui = AuthUi::builder()
             .launch(AuthUiInit {
@@ -159,7 +180,12 @@ where
                 last_user_session_cache,
                 greetd_state,
             })
-            .detach();
+            .forward(notifications.sender(), |AuthUiOutput::ShowError(error)| {
+                NotificationListMsg::Notify(NotificationItemInit {
+                    markup_text: error,
+                    message_type: gtk4::MessageType::Error,
+                })
+            });
 
         let reboot_btn = ActionButton::builder()
             .launch(ActionButtonInit {
@@ -190,6 +216,7 @@ where
             poweroff_cmd,
             auth_ui,
             action_buttons: vec![reboot_btn, poweroff_btn],
+            notifications,
         };
         let widgets = view_output!();
 
