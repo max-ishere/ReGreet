@@ -104,6 +104,16 @@ where
                     }
                 },
 
+                add_overlay = model.notifications.widget() {
+                    set_halign: gtk::Align::End,
+                    set_valign: gtk::Align::Fill,
+
+                    set_margin_all: 15,
+
+                    set_propagate_natural_width: true,
+                    set_propagate_natural_height: true,
+                },
+
                 add_overlay = &gtk::Frame {
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
@@ -129,16 +139,6 @@ where
 
                         append = model.auth_ui.widget(),
                     }
-                },
-
-                add_overlay = model.notifications.widget() {
-                    set_halign: gtk::Align::End,
-                    set_valign: gtk::Align::Fill,
-
-                    set_margin_all: 15,
-
-                    set_propagate_natural_width: true,
-                    set_propagate_natural_height: true,
                 },
             }
         }
