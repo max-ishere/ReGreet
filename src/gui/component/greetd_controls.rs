@@ -66,8 +66,6 @@ where
         /// Can be used to retrieve the prompt text and it's type.
         #[derivative(Debug = "ignore")]
         session: Client::AuthQuestion,
-        /// The current value of the input that will be sent to greetd when the login button is pressed.
-        credential: String,
     },
 
     /// An informative auth prompt from greetd. Looks like an info box with the message type set according to what the prompt is - info or error.
@@ -121,18 +119,16 @@ pub enum GreetdControlsMsg {
 
     /// Internal message
     ///
-    /// Emited by the question auth inputs to update the response.
-    CredentialChanged(#[derivative(Debug = "ignore")] String),
-
-    /// Internal message
-    ///
     /// Cancels the session
     Cancel,
 
     /// Internal message
     ///
     /// Advances the authentication to the next step.
-    AdvanceAuthentication,
+    AdvanceAuthentication(
+        /// Credential value
+        Option<String>,
+    ),
 }
 
 #[derive(Debug)]
@@ -228,12 +224,12 @@ where
                             #[watch]
                             grab_focus: (),
 
-                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication,
+                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
                         },
                     }
                 }
 
-                GreetdState::AuthQuestion{ session: question, credential } => gtk::Box {
+                GreetdState::AuthQuestion{ session: question } => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
 
@@ -246,45 +242,74 @@ where
                     },
 
                     append = match question.auth_question() {
-                        AuthQuestion::Secret(prompt) => gtk::PasswordEntry {
-                            #[watch]
-                            set_placeholder_text: Some(prompt),
+                        AuthQuestion::Secret(prompt) => gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 15,
 
-                            #[track( model.reset_question_inputs_event )]
-                            set_text: credential,
+                            #[name = "password_entry"]
+                            gtk::PasswordEntry {
+                                #[watch]
+                                set_placeholder_text: Some(prompt),
 
-                            set_show_peek_icon: true,
+                                #[track( model.reset_question_inputs_event )]
+                                set_text: "",
 
-                            #[track( model.reset_question_inputs_event )]
-                            grab_focus: (),
+                                set_show_peek_icon: true,
 
-                            connect_changed[sender] => move |this| {
-                                sender.input(Self::Input::CredentialChanged(this.text().to_string()))
+                                #[track( model.reset_question_inputs_event )]
+                                grab_focus: (),
+
+                                connect_activate[sender] => move |this| {
+                                    sender.input(Self::Input::AdvanceAuthentication(Some(this.text().to_string())))
+                                }
                             },
-                            connect_activate => Self::Input::AdvanceAuthentication,
+
+                            #[template]
+                            append = &LoginBox {
+                                #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
+                                #[template] LoginButton {
+                                    connect_clicked[sender, password_entry] => move |_| {
+                                        sender.input(GreetdControlsMsg::AdvanceAuthentication(
+                                            Some(password_entry.text().to_string())
+                                        ))
+                                    }
+                                },
+                            }
                         }
-                        AuthQuestion::Visible(prompt) => gtk::Entry {
-                            #[watch]
-                            set_placeholder_text: Some(prompt),
 
-                            #[track( model.reset_question_inputs_event )]
-                            set_text: credential,
+                        AuthQuestion::Visible(prompt) => gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 15,
 
-                            #[track( model.reset_question_inputs_event )]
-                            grab_focus: (),
+                            #[name = "visible_entry"]
+                            gtk::Entry {
+                                #[watch]
+                                set_placeholder_text: Some(prompt),
 
-                            connect_changed[sender] => move |this| {
-                                sender.input(Self::Input::CredentialChanged(this.text().to_string()))
+                                #[track( model.reset_question_inputs_event )]
+                                set_text: "",
+
+                                #[track( model.reset_question_inputs_event )]
+                                grab_focus: (),
+
+                                connect_activate[sender] => move |this| {
+                                    sender.input(Self::Input::AdvanceAuthentication(Some(this.text().to_string())))
+                                }
                             },
-                            connect_activate => Self::Input::AdvanceAuthentication,
+
+                            #[template]
+                            append = &LoginBox {
+                                #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
+                                #[template] LoginButton {
+                                    connect_clicked[sender, visible_entry] => move |_| {
+                                        sender.input(GreetdControlsMsg::AdvanceAuthentication(
+                                            Some(visible_entry.text().to_string())
+                                        ))
+                                    }
+                                },
+                            }
                         }
                     },
-
-                    #[template]
-                    append = &LoginBox {
-                        #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
-                        #[template] LoginButton { connect_clicked => GreetdControlsMsg::AdvanceAuthentication },
-                    }
                 }
 
                 GreetdState::AuthInformative(informative) => gtk::Box {
@@ -302,8 +327,8 @@ where
                             AuthInformative::Error(_) => gtk::MessageType::Error,
                         },
 
-                    #[template]
-                    AuthMessageLabel {
+                        #[template]
+                        AuthMessageLabel {
                             #[watch]
                             set_text: informative.auth_informative().prompt(),
                         }
@@ -316,7 +341,7 @@ where
                             #[watch]
                             grab_focus: (),
 
-                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication,
+                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
                         },
                     }
                 }
@@ -340,11 +365,11 @@ where
                     #[template] LoginButton {
                         grab_focus: (),
 
-                        connect_clicked => GreetdControlsMsg::AdvanceAuthentication,
-                     },
+                        connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
+                    },
                 }
 
-            },
+            } ,
         }
     }
 
@@ -360,15 +385,13 @@ where
             env,
         } = init;
 
-        let reset_question_inputs_event = matches!(greetd_state, GreetdState::AuthQuestion { .. });
-
         let model = Self {
             greetd_state,
             username,
             command: Some(command),
             env,
 
-            reset_question_inputs_event,
+            reset_question_inputs_event: false,
         };
         let widgets = view_output!();
 
@@ -383,16 +406,14 @@ where
         self.reset_question_inputs_event = false;
 
         match message {
-            GreetdControlsMsg::CredentialChanged(new_cred) => {
-                if let GreetdState::AuthQuestion {
-                    ref mut credential, ..
-                } = self.greetd_state
-                {
-                    *credential = new_cred;
-                }
+            GreetdControlsMsg::Cancel => {
+                self.reset_question_inputs_event = true;
+
+                self.cancel_session(&sender)
             }
-            GreetdControlsMsg::Cancel => self.cancel_session(&sender),
-            GreetdControlsMsg::AdvanceAuthentication => self.advance_authentication(&sender),
+            GreetdControlsMsg::AdvanceAuthentication(credential) => {
+                self.advance_authentication(&sender, credential)
+            }
 
             GreetdControlsMsg::UpdateUser(username) => self.change_user(username),
 
@@ -423,10 +444,10 @@ where
             error,
         } = message;
 
-        if let Some(error) = error {
+        if let Some(ref error) = error {
             error!("Greetd error: {error}");
             sender
-                .output(GreetdControlsOutput::NotifyError(error))
+                .output(GreetdControlsOutput::NotifyError(error.clone()))
                 .expect("auth view controller should not be dropped");
         }
 
@@ -472,6 +493,13 @@ where
                 .output(GreetdControlsOutput::LockUserSelectors)
                 .unwrap();
         }
+
+        if matches!(
+            (error, &self.greetd_state),
+            (None, GreetdState::AuthQuestion { .. })
+        ) {
+            self.reset_question_inputs_event = true;
+        }
     }
 }
 
@@ -500,15 +528,9 @@ where
                 }
             }),
 
-            S::AuthQuestion {
-                session,
-                mut credential,
-            } => sender.oneshot_command(async {
-                let (greetd_state, error) = try_cancel(session, move |session| S::AuthQuestion {
-                    session,
-                    credential: take(&mut credential),
-                })
-                .await;
+            S::AuthQuestion { session } => sender.oneshot_command(async {
+                let (greetd_state, error) =
+                    try_cancel(session, move |session| S::AuthQuestion { session }).await;
 
                 CommandOutput::GreetdResponse {
                     greetd_state,
@@ -527,7 +549,11 @@ where
         };
     }
 
-    fn advance_authentication(&mut self, sender: &ComponentSender<Self>) {
+    fn advance_authentication(
+        &mut self,
+        sender: &ComponentSender<Self>,
+        credential: Option<String>,
+    ) {
         use GreetdState as S;
 
         let greetd_state = replace(
@@ -554,19 +580,11 @@ where
                 });
             }
 
-            GreetdState::AuthQuestion {
-                session,
-                mut credential,
-            } => sender.oneshot_command(async {
-                let cred = Some(credential.clone());
-
+            GreetdState::AuthQuestion { session } => sender.oneshot_command(async {
                 let (greetd_state, error) = try_auth(
                     session,
-                    move |session| S::AuthQuestion {
-                        session,
-                        credential: take(&mut credential),
-                    },
-                    cred,
+                    move |session| S::AuthQuestion { session },
+                    credential,
                 )
                 .await;
 
@@ -646,10 +664,7 @@ where
     (
         match session {
             R::Success(startable) => GreetdState::Startable(startable),
-            R::AuthQuestion(question) => GreetdState::AuthQuestion {
-                session: question,
-                credential: String::new(),
-            },
+            R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
             R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
         },
         None,
@@ -692,7 +707,7 @@ async fn try_auth<Message>(
 where
     Message: AuthResponse,
 {
-    let res = match message.respond(dbg!(credential)).await {
+    let res = match message.respond(credential).await {
         Ok(res) => res,
         Err((message, err)) => return (variant(message), Some(format!("{}", err))),
     };
@@ -706,10 +721,7 @@ where
     (
         match session {
             R::Success(startable) => GreetdState::Startable(startable),
-            R::AuthQuestion(question) => GreetdState::AuthQuestion {
-                session: question,
-                credential: String::new(),
-            },
+            R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
             // TODO: For info, mimic what https://github.com/rharish101/ReGreet/pull/4 does.
             R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
         },
