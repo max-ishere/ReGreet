@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    mem::{replace, take},
-};
+use std::{fmt::Debug, mem::replace};
 
 use derivative::Derivative;
 use relm4::{gtk::prelude::*, prelude::*};

@@ -29,10 +29,6 @@ mod notification_item;
 mod notification_list;
 mod selector;
 
-// TODO: Add a notification column component to display multiple errors. Then display different things like warnings ...
-// from loading the cache files etc. This way, when there's an error, the user will see it and won't have to discover it
-// through the logs.
-
 pub struct AppInit<Client>
 where
     Client: Greetd,
