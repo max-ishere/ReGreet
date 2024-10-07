@@ -111,9 +111,7 @@ async fn async_main(config: PathBuf, demo: bool, mut errors: Vec<NotificationIte
         config.commands.reboot = vec![];
         config.commands.poweroff = vec![];
 
-        let greetd_state = GreetdState::AuthQuestion {
-            session: DemoGreetd {},
-        };
+        let greetd_state = GreetdState::NotCreated(DemoGreetd {});
 
         app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config, errors));
 

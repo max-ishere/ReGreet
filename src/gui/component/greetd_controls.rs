@@ -66,7 +66,7 @@ where
     },
 
     /// An informative auth prompt from greetd. Looks like an info box with the message type set according to what the prompt is - info or error.
-    AuthInformative(#[derivative(Debug = "ignore")] Client::AuthInformative),
+    AuthInformative(GreetdInformativeState<Client>),
 
     /// Used as a placeholder to do 2 things.
     /// 1. Lock the UI while a greetd operation takes place (shows an info box with no buttons).
@@ -75,6 +75,17 @@ where
         /// Message shown while an operation is pending. This will always be an info message type.
         String,
     ),
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub enum GreetdInformativeState<Client>
+where
+    Client: Greetd,
+{
+    NotSent(#[derivative(Debug = "ignore")] Client::AuthInformative),
+    WaitingForInfo(String),
+    WaitingForError(String),
 }
 
 #[derive(Debug)]
@@ -204,13 +215,15 @@ where
 
                     gtk::Separator,
 
-                    append = &gtk::InfoBar {
-                        set_show_close_button: false,
-                        set_message_type: gtk::MessageType::Info,
+                    append = &gtk::Frame {
+                        gtk::InfoBar {
+                            set_show_close_button: false,
+                            set_message_type: gtk::MessageType::Info,
 
-                        #[template]
-                        AuthMessageLabel {
-                            set_text: "Session can be started.",
+                            #[template]
+                            AuthMessageLabel {
+                                set_text: "Session can be started.",
+                            }
                         }
                     },
 
@@ -309,31 +322,77 @@ where
                     },
                 }
 
-                GreetdState::AuthInformative(informative) => gtk::Box {
+                GreetdState::AuthInformative(state) => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
 
                     gtk::Separator,
 
-                    append = &gtk::InfoBar {
-                        set_show_close_button: false,
+                    append = match state {
+                        GreetdInformativeState::NotSent(informative) => &gtk::Frame {
+                            gtk::InfoBar {
+                                set_show_close_button: false,
 
-                        #[watch]
-                        set_message_type: match informative.auth_informative() {
-                            AuthInformative::Info(_) => gtk::MessageType::Question,
-                            AuthInformative::Error(_) => gtk::MessageType::Error,
+                                #[watch]
+                                set_message_type: match informative.auth_informative() {
+                                    AuthInformative::Info(_) => gtk::MessageType::Question,
+                                    AuthInformative::Error(_) => gtk::MessageType::Error,
+                                },
+
+                                #[template]
+                                AuthMessageLabel {
+                                    set_wrap: true,
+
+                                    #[watch]
+                                    set_text: informative.auth_informative().prompt(),
+                                }
+                            }
                         },
 
-                        #[template]
-                        AuthMessageLabel {
-                            #[watch]
-                            set_text: informative.auth_informative().prompt(),
+                        GreetdInformativeState::WaitingForInfo(prompt) => &gtk::Frame {
+                            gtk::InfoBar {
+                                set_show_close_button: false,
+
+                                #[watch]
+                                set_message_type: gtk::MessageType::Info,
+
+                                #[template]
+                                AuthMessageLabel {
+                                    set_wrap: true,
+
+                                    #[watch]
+                                    set_text: prompt,
+                                }
+                            }
+                        }
+
+                        GreetdInformativeState::WaitingForError(prompt) => &gtk::Frame {
+                            gtk::InfoBar {
+                                set_show_close_button: false,
+
+                                #[watch]
+                                set_message_type: gtk::MessageType::Error,
+
+                                #[template]
+                                AuthMessageLabel {
+                                    set_wrap: true,
+
+                                    #[watch]
+                                    set_text: prompt,
+                                }
+                            }
                         }
                     },
 
+
                     #[template]
                     append = &LoginBox {
-                        #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
+                        #[template] CancelButton {
+                            #[watch]
+                            set_sensitive: matches!(state, GreetdInformativeState::NotSent(_)),
+
+                            connect_clicked => GreetdControlsMsg::Cancel
+                        },
                         #[template] LoginButton {
                             #[watch]
                             grab_focus: (),
@@ -448,8 +507,8 @@ where
                 .expect("auth view controller should not be dropped");
         }
 
-        self.greetd_state = if let GreetdState::Startable(startable) = greetd_state {
-            match &self.command {
+        self.greetd_state = match greetd_state {
+            GreetdState::Startable(startable) => match &self.command {
                 Some(command) => {
                     let env = self.env.clone();
                     let command = command.clone();
@@ -476,9 +535,31 @@ where
 
                     GreetdState::Startable(startable)
                 }
+            },
+
+            GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative)) => {
+                let new_state = informative.auth_informative().into();
+
+                sender.oneshot_command(async {
+                    let (greetd_state, error) = try_auth(
+                        informative,
+                        |state| {
+                            GreetdState::AuthInformative(GreetdInformativeState::NotSent(state))
+                        },
+                        None,
+                    )
+                    .await;
+
+                    CommandOutput::GreetdResponse {
+                        greetd_state,
+                        error,
+                    }
+                });
+
+                GreetdState::AuthInformative(new_state)
             }
-        } else {
-            greetd_state
+
+            other => other,
         };
 
         if let GreetdState::NotCreated(_) = self.greetd_state {
@@ -535,14 +616,24 @@ where
                 }
             }),
 
-            S::AuthInformative(session) => sender.oneshot_command(async {
-                let (greetd_state, error) = try_cancel(session, S::AuthInformative).await;
+            S::AuthInformative(GreetdInformativeState::NotSent(session)) => {
+                sender.oneshot_command(async {
+                    let (greetd_state, error) = try_cancel(session, |state| {
+                        S::AuthInformative(GreetdInformativeState::NotSent(state))
+                    })
+                    .await;
 
-                CommandOutput::GreetdResponse {
-                    greetd_state,
-                    error,
-                }
-            }),
+                    CommandOutput::GreetdResponse {
+                        greetd_state,
+                        error,
+                    }
+                })
+            }
+            S::AuthInformative(_) => sender
+                .output(GreetdControlsOutput::NotifyError(
+                    "An operation is currently pending, cannot cancel.".to_string(),
+                ))
+                .unwrap(),
         };
     }
 
@@ -591,14 +682,26 @@ where
                 }
             }),
 
-            GreetdState::AuthInformative(informative) => sender.oneshot_command(async {
-                let (greetd_state, error) = try_auth(informative, S::AuthInformative, None).await;
+            GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative)) => sender
+                .oneshot_command(async {
+                    let (greetd_state, error) = try_auth(
+                        informative,
+                        |state| S::AuthInformative(GreetdInformativeState::NotSent(state)),
+                        None,
+                    )
+                    .await;
 
-                CommandOutput::GreetdResponse {
-                    greetd_state,
-                    error,
-                }
-            }),
+                    CommandOutput::GreetdResponse {
+                        greetd_state,
+                        error,
+                    }
+                }),
+
+            GreetdState::AuthInformative(_) => sender
+                .output(GreetdControlsOutput::NotifyError(
+                    "An operation is currently pending, cannot cancel".to_string(),
+                ))
+                .unwrap(),
         };
     }
 
@@ -607,7 +710,8 @@ where
 
         match &self.greetd_state {
             S::NotCreated(_) => self.username = username,
-            _user_cannot_be_switched_infallibly => {
+            _ => {
+                // TODO: The selector may be locked but a change user message could still be pending in the queue
                 unreachable!("The user cannot be switched in this Greetd IPC state without a chance of it failing. Please ensure the controls are locked.")
             }
         }
@@ -662,7 +766,9 @@ where
         match session {
             R::Success(startable) => GreetdState::Startable(startable),
             R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
-            R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
+            R::AuthInformative(informative) => {
+                GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative))
+            }
         },
         None,
     )
@@ -720,8 +826,22 @@ where
             R::Success(startable) => GreetdState::Startable(startable),
             R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
             // TODO: For info, mimic what https://github.com/rharish101/ReGreet/pull/4 does.
-            R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
+            R::AuthInformative(informative) => {
+                GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative))
+            }
         },
         None,
     )
+}
+
+impl<Client> From<AuthInformative<'_>> for GreetdInformativeState<Client>
+where
+    Client: Greetd,
+{
+    fn from(msg: AuthInformative) -> Self {
+        match msg {
+            AuthInformative::Info(str) => Self::WaitingForInfo(str.to_string()),
+            AuthInformative::Error(str) => Self::WaitingForError(str.to_string()),
+        }
+    }
 }
