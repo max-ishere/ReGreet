@@ -1,4 +1,6 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, time::Duration};
+
+use tokio::time::sleep;
 
 use crate::greetd::CreateSessionResponse;
 use crate::greetd_response;
@@ -21,7 +23,7 @@ impl Greetd for DemoGreetd {
         self,
         _username: &str,
     ) -> greetd_response!(Self, CreateSessionResponse<Self>) {
-        async { Ok(Ok(CreateSessionResponse::AuthQuestion(self))) }
+        async { Ok(Ok(CreateSessionResponse::AuthInformative(self))) }
     }
 }
 
@@ -39,7 +41,7 @@ impl AuthResponse for DemoGreetd {
     type Client = Self;
 
     fn message(&self) -> AuthMessage<'_> {
-        AuthMessage::Secret("Password")
+        AuthMessage::Info("Touch the fingerprint sensor")
     }
 
     fn respond(
@@ -49,7 +51,10 @@ impl AuthResponse for DemoGreetd {
         <Self as AuthResponse>::Client,
         CreateSessionResponse<<Self as AuthResponse>::Client>
     ) {
-        async { Ok(Ok(CreateSessionResponse::Success(self))) }
+        async {
+            sleep(Duration::from_secs(5)).await;
+            Ok(Ok(CreateSessionResponse::Success(self)))
+        }
     }
 }
 
