@@ -10,24 +10,24 @@ mod greetd;
 mod gui;
 mod sysutil;
 
-use std::collections::HashMap;
 use std::env;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Result as IoResult, Write};
 use std::path::{Path, PathBuf};
 
-use cache::{Cache, SessionIdOrCmdline};
+use cache::Cache;
 use clap::{Parser, ValueEnum};
 use config::{AppearanceConfig, BackgroundConfig, Config, SystemCommandsConfig};
-use constants::CACHE_PATH;
+use constants::{CACHE_LIMIT, CACHE_PATH};
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
 use greetd::{DemoGreetd, Greetd};
 use gtk4::glib::markup_escape_text;
 use gtk4::MessageType;
-use gui::component::{App, AppInit, EntryOrDropDown, GreetdState, NotificationItemInit};
+use gui::component::{App, AppInit, GreetdState, NotificationItemInit};
 use relm4::RelmApp;
 use sysutil::SystemUsersAndSessions;
 use tokio::net::UnixStream;
+use tokio::task::spawn_blocking;
 use tracing::subscriber::set_global_default;
 use tracing::{error, warn};
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
@@ -105,15 +105,18 @@ async fn async_main(config: PathBuf, demo: bool, mut errors: Vec<NotificationIte
     let (cache, mut config, users, new_errors) = load_files(config).await;
     errors.extend(new_errors);
 
-    let app = RelmApp::new(APP_ID);
-
     if demo {
         config.commands.reboot = vec![];
         config.commands.poweroff = vec![];
 
         let greetd_state = GreetdState::NotCreated(DemoGreetd {});
 
-        app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config, errors));
+        spawn_blocking(move || {
+            let app = RelmApp::new(APP_ID);
+            app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config, errors))
+        })
+        .await
+        .unwrap();
 
         return;
     }
@@ -124,7 +127,12 @@ async fn async_main(config: PathBuf, demo: bool, mut errors: Vec<NotificationIte
 
     let greetd_state = GreetdState::NotCreated(socket);
 
-    app.run::<App<UnixStream>>(mk_app_init(greetd_state, cache, users, config, errors));
+    spawn_blocking(move || {
+        let app = RelmApp::new(APP_ID);
+        app.run::<App<UnixStream>>(mk_app_init(greetd_state, cache, users, config, errors))
+    })
+    .await
+    .unwrap();
 }
 
 async fn load_files<P>(
@@ -140,7 +148,7 @@ where
 {
     let mut errors = vec![];
 
-    let (cache, config) = tokio::join!(Cache::load(CACHE_PATH), Config::load(config),);
+    let (cache, config) = tokio::join!(Cache::load(CACHE_PATH, CACHE_LIMIT), Config::load(config),);
 
     let cache = cache.unwrap_or_else(|err| {
         let warning = format!("Failed to load the cache, starting without it: {err}");
@@ -211,27 +219,9 @@ where
         .and_then(|user| users.contains_key(user).then_some(user.to_string()))
         .unwrap_or_else(|| users.keys().next().cloned().unwrap_or_default());
 
-    let mut last_user_session_cache: HashMap<_, _> = cache
-        .user_to_last_sess
-        .into_iter()
-        .filter_map(|(username, session)| match session {
-            SessionIdOrCmdline::XdgDektopFile(id) => sessions
-                .contains_key(&id)
-                .then_some((username, EntryOrDropDown::DropDown(id))),
-
-            SessionIdOrCmdline::Command(cmd) => Some((username, EntryOrDropDown::Entry(cmd))),
-        })
-        .collect();
-
     let users = users
         .into_iter()
-        .map(|(sys, user)| {
-            if sessions.is_empty() {
-                last_user_session_cache
-                    .insert(sys.clone(), EntryOrDropDown::Entry(user.shell().to_owned()));
-            }
-            (sys, user.full_name)
-        })
+        .map(|(sys, user)| (sys, user.full_name))
         .collect();
 
     AppInit {
@@ -239,8 +229,8 @@ where
         sessions,
         env,
         initial_user,
-        last_user_session_cache,
         greetd_state,
+        cache,
         picture,
         fit: fit.into(),
         title_message: greeting_msg,

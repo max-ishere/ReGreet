@@ -29,6 +29,8 @@ pub struct SystemUsersAndSessions {
 #[derive(Default, Debug)]
 pub struct User {
     pub full_name: String,
+    // TODO: there should be separate UI for selecting a shell due to special meaning of the dropdown and how it translates to a cache type
+    // Potentially make the session label into a dropdown that selects [session, shell, command]
     login_shell: Option<String>,
 }
 

@@ -65,10 +65,7 @@ impl StartableSession for DemoGreetd {
         self,
         _cmd: Vec<String>,
         _env: Vec<String>,
-    ) -> greetd_response!(
-        <Self as StartableSession>::Client,
-        <Self as StartableSession>::Client
-    ) {
-        async { Ok(Ok(self)) }
+    ) -> greetd_response!(<Self as StartableSession>::Client, ()) {
+        async { Ok(Ok(())) }
     }
 }

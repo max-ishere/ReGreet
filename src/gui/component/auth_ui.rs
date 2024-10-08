@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::mem::take;
 
+use anyhow::Context;
 use derivative::Derivative;
 use relm4::{gtk::prelude::*, prelude::*};
 use tracing::error;
 
-use crate::greetd::Greetd;
+use crate::cache::SessionIdOrCmdline;
+use crate::constants::{CACHE_LIMIT, CACHE_PATH};
 use crate::sysutil::SessionInfo;
+use crate::{cache::Cache, greetd::Greetd};
 
 use super::{
     EntryOrDropDown, GreetdControls, GreetdControlsInit, GreetdControlsMsg, GreetdControlsOutput,
@@ -26,7 +30,7 @@ where
     pub env: HashMap<String, String>,
 
     pub initial_user: String,
-    pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
+    pub cache: Cache,
 
     pub greetd_state: GreetdState<Client>,
 }
@@ -35,7 +39,10 @@ pub struct AuthUi<Client>
 where
     Client: Greetd + 'static + Debug,
 {
-    last_user_session_cache: HashMap<String, EntryOrDropDown>,
+    cache: Cache,
+
+    current_username: String,
+    current_session: EntryOrDropDown,
 
     #[doc(hidden)]
     user_selector: Controller<Selector>,
@@ -48,6 +55,7 @@ where
 #[derive(Debug)]
 pub enum AuthUiOutput {
     ShowError(String),
+    SessionStarted,
 }
 
 #[derive(Derivative)]
@@ -59,6 +67,8 @@ pub enum AuthUiMsg {
 
     LockUserSelectors,
     UnlockUserSelectors,
+
+    SessionStarted,
 }
 
 #[relm4::component(pub)]
@@ -104,21 +114,20 @@ where
             env,
 
             initial_user,
-            last_user_session_cache,
+            cache,
 
             greetd_state,
         } = init;
 
-        let initial_session = last_user_session_cache
-            .get(&initial_user)
-            .and_then(|entry| {
-                if let EntryOrDropDown::DropDown(id) = entry {
-                    sessions.contains_key(id).then_some(entry)
-                } else {
-                    Some(entry)
-                }
+        let initial_session = cache
+            .last_user()
+            .and_then(|user| cache.last_user_session(user))
+            .and_then(|session| match session {
+                SessionIdOrCmdline::XdgDektopFile(id) => sessions
+                    .contains_key(id)
+                    .then_some(EntryOrDropDown::DropDown(id.clone())),
+                SessionIdOrCmdline::Command(cmd) => Some(EntryOrDropDown::Entry(cmd.clone())),
             })
-            .cloned()
             .unwrap_or(
                 sessions
                     .keys()
@@ -171,7 +180,7 @@ where
                         text: name.clone(),
                     })
                     .collect(),
-                initial_selection: initial_session,
+                initial_selection: initial_session.clone(),
                 locked: false,
                 toggle_icon_name: "document-edit-symbolic".to_string(),
                 toggle_tooltip: "Manually enter session command".to_string(),
@@ -191,7 +200,7 @@ where
         let auth_view = GreetdControls::builder()
             .launch(GreetdControlsInit {
                 greetd_state,
-                username: initial_user,
+                username: initial_user.clone(),
                 command: initial_command,
                 env: env.into_iter().map(|(k, v)| format!("{k}={v}")).collect(),
             })
@@ -203,11 +212,15 @@ where
                     O::NotifyError(error) => I::ShowError(error),
                     O::LockUserSelectors => I::LockUserSelectors,
                     O::UnlockUserSelectors => I::UnlockUserSelectors,
+                    O::SessionStarted => I::SessionStarted,
                 }
             });
 
         let model = Self {
-            last_user_session_cache,
+            cache,
+
+            current_username: initial_user,
+            current_session: initial_session,
 
             user_selector,
             session_selector,
@@ -229,12 +242,17 @@ where
                 self.auth_view
                     .emit(GreetdControlsMsg::UpdateUser(username.clone()));
 
-                let Some(last_session) = self.last_user_session_cache.get(&username) else {
+                let Some(last_session) = self.cache.last_user_session(&username) else {
                     return;
                 };
 
                 self.session_selector
-                    .emit(SelectorMsg::Set(last_session.clone()));
+                    .emit(SelectorMsg::Set(match last_session {
+                        SessionIdOrCmdline::Command(cmd) => EntryOrDropDown::Entry(cmd.clone()),
+                        SessionIdOrCmdline::XdgDektopFile(id) => {
+                            EntryOrDropDown::DropDown(id.clone())
+                        }
+                    }));
             }
 
             I::SessionChanged(entry) => {
@@ -248,6 +266,35 @@ where
                 error!("ShowError messsage: {error}");
 
                 sender.output(AuthUiOutput::ShowError(error)).unwrap();
+            }
+
+            I::SessionStarted => {
+                self.user_selector.emit(SelectorMsg::Lock);
+                self.session_selector.emit(SelectorMsg::Lock);
+
+                self.cache.set_last_login(
+                    self.current_username.clone(),
+                    match self.current_session.clone() {
+                        EntryOrDropDown::Entry(cmd) => SessionIdOrCmdline::Command(cmd),
+                        EntryOrDropDown::DropDown(id) => SessionIdOrCmdline::XdgDektopFile(id),
+                    },
+                );
+
+                let cache = take(&mut self.cache);
+                let send = sender.clone();
+                sender.command(move |_, _| async move {
+                    let Err(e) = cache
+                        .save(CACHE_PATH, CACHE_LIMIT)
+                        .await
+                        .with_context(|| format!("Failed to save the cache file `{CACHE_PATH}`"))
+                    else {
+                        return;
+                    };
+
+                    error!("{e:?}");
+
+                    send.output(AuthUiOutput::SessionStarted).unwrap();
+                })
             }
         }
     }

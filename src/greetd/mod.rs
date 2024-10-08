@@ -182,10 +182,7 @@ pub trait StartableSession: CancellableSession + Send {
         self,
         cmd: Vec<String>,
         env: Vec<String>,
-    ) -> greetd_response!(
-        <Self as StartableSession>::Client,
-        <Self as StartableSession>::Client
-    );
+    ) -> greetd_response!(<Self as StartableSession>::Client, ());
 }
 
 /// An IPC state where a session can be canceled.

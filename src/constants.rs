@@ -33,6 +33,8 @@ pub const CONFIG_PATH: &str = concatcp!(GREETD_CONFIG_DIR, "/", GREETER_NAME, ".
 const CACHE_DIR: &str = env_or!("CACHE_DIR", concatcp!("/var/cache/", GREETER_NAME));
 /// Path to the cache file
 pub const CACHE_PATH: &str = concatcp!(CACHE_DIR, "/cache.toml");
+/// Default size limit for the cache file
+pub const CACHE_LIMIT: usize = 100;
 
 /// The directory for system log files
 const LOG_DIR: &str = env_or!("LOG_DIR", concatcp!("/var/log/", GREETER_NAME));

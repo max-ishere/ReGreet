@@ -75,6 +75,9 @@ where
         /// Message shown while an operation is pending. This will always be an info message type.
         String,
     ),
+
+    /// A value to indicate that a session start request has succeeded and it is time to exit
+    SessionStarted,
 }
 
 #[derive(Derivative)]
@@ -104,6 +107,9 @@ pub enum GreetdControlsOutput {
 
     /// The widget is capable of handling user switching again.
     UnlockUserSelectors,
+
+    /// Emited when the IPC start_session request succeeds.
+    SessionStarted,
 }
 
 #[derive(Derivative)]
@@ -402,17 +408,34 @@ where
                     }
                 }
 
-                GreetdState::Loading(message) => gtk::InfoBar {
-                    set_show_close_button: false,
-                    set_message_type: gtk::MessageType::Info,
+                GreetdState::Loading(message) => gtk::Frame {
+                    gtk::InfoBar {
+                        set_show_close_button: false,
+                        set_message_type: gtk::MessageType::Info,
 
-                    gtk::Separator,
+                        gtk::Separator,
 
-                    #[template]
-                    AuthMessageLabel {
-                        #[watch]
-                        set_text: message.as_str(),
-                        set_valign: gtk::Align::Start,
+                        #[template]
+                        AuthMessageLabel {
+                            #[watch]
+                            set_text: message.as_str(),
+                            set_valign: gtk::Align::Start,
+                        }
+                    }
+                }
+
+                GreetdState::SessionStarted => gtk::Frame {
+                    gtk::InfoBar {
+                        set_show_close_button: false,
+                        set_message_type: gtk::MessageType::Info,
+
+                        gtk::Separator,
+
+                        #[template]
+                        AuthMessageLabel {
+                            set_text: "Session started",
+                            set_valign: gtk::Align::Start,
+                        }
                     }
                 }
 
@@ -424,8 +447,7 @@ where
                         connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
                     },
                 }
-
-            } ,
+            },
         }
     }
 
@@ -559,6 +581,12 @@ where
                 GreetdState::AuthInformative(new_state)
             }
 
+            GreetdState::SessionStarted => {
+                sender.output(GreetdControlsOutput::SessionStarted).unwrap();
+
+                GreetdState::SessionStarted
+            }
+
             other => other,
         };
 
@@ -634,6 +662,8 @@ where
                     "An operation is currently pending, cannot cancel.".to_string(),
                 ))
                 .unwrap(),
+
+            S::SessionStarted => (),
         };
     }
 
@@ -651,11 +681,9 @@ where
 
         match greetd_state {
             S::Loading(old) => self.greetd_state = S::Loading(old),
-            GreetdState::Startable(startable) => {
-                self.greetd_state = GreetdState::Startable(startable)
-            }
+            S::Startable(startable) => self.greetd_state = GreetdState::Startable(startable),
 
-            GreetdState::NotCreated(client) => {
+            S::NotCreated(client) => {
                 let username = self.username.clone();
 
                 sender.oneshot_command(async {
@@ -668,7 +696,7 @@ where
                 });
             }
 
-            GreetdState::AuthQuestion { session } => sender.oneshot_command(async {
+            S::AuthQuestion { session } => sender.oneshot_command(async {
                 let (greetd_state, error) = try_auth(
                     session,
                     move |session| S::AuthQuestion { session },
@@ -682,7 +710,7 @@ where
                 }
             }),
 
-            GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative)) => sender
+            S::AuthInformative(GreetdInformativeState::NotSent(informative)) => sender
                 .oneshot_command(async {
                     let (greetd_state, error) = try_auth(
                         informative,
@@ -697,11 +725,13 @@ where
                     }
                 }),
 
-            GreetdState::AuthInformative(_) => sender
+            S::AuthInformative(_) => sender
                 .output(GreetdControlsOutput::NotifyError(
                     "An operation is currently pending, cannot cancel".to_string(),
                 ))
                 .unwrap(),
+
+            S::SessionStarted => {}
         };
     }
 
@@ -794,7 +824,7 @@ where
     };
 
     match res {
-        Ok(client) => (GreetdState::NotCreated(client), None),
+        Ok(()) => (GreetdState::SessionStarted, None),
         Err((startable, err)) => (variant(startable), Some(format!("{}", err))),
     }
 }
@@ -825,7 +855,6 @@ where
         match session {
             R::Success(startable) => GreetdState::Startable(startable),
             R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
-            // TODO: For info, mimic what https://github.com/rharish101/ReGreet/pull/4 does.
             R::AuthInformative(informative) => {
                 GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative))
             }

@@ -112,10 +112,7 @@ where
         self,
         cmd: Vec<String>,
         env: Vec<String>,
-    ) -> greetd_response!(
-        <Self as StartableSession>::Client,
-        <Self as StartableSession>::Client
-    ) {
+    ) -> greetd_response!(<Self as StartableSession>::Client, ()) {
         async {
             debug!("Starting session with command {cmd:?}",);
 
@@ -124,7 +121,7 @@ where
             let (client, response) = make_request(self, Request::StartSession { cmd, env }).await?;
 
             match response {
-                Response::Success => ok(client),
+                Response::Success => ok(()),
                 Response::Error {
                     error_type: ErrorType::AuthError,
                     description,

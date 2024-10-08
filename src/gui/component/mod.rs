@@ -12,7 +12,7 @@ use relm4::{
 };
 use tracing::{debug, error, info};
 
-use crate::{greetd::Greetd, sysutil::SessionInfo};
+use crate::{cache::Cache, greetd::Greetd, sysutil::SessionInfo};
 use action_button::*;
 use auth_ui::*;
 pub use greetd_controls::GreetdState;
@@ -38,7 +38,7 @@ where
     pub env: HashMap<String, String>,
 
     pub initial_user: String,
-    pub last_user_session_cache: HashMap<String, EntryOrDropDown>,
+    pub cache: Cache,
 
     pub greetd_state: GreetdState<Client>,
 
@@ -68,6 +68,8 @@ where
 pub enum AppMsg {
     Reboot,
     Poweroff,
+    ShowNotification(NotificationItemInit),
+    SessionStarted,
 }
 
 #[relm4::component(pub)]
@@ -155,7 +157,7 @@ where
             sessions,
             env,
             initial_user,
-            last_user_session_cache,
+            cache,
             greetd_state,
             picture,
             fit,
@@ -173,14 +175,15 @@ where
                 sessions,
                 env,
                 initial_user,
-                last_user_session_cache,
+                cache,
                 greetd_state,
             })
-            .forward(notifications.sender(), |AuthUiOutput::ShowError(error)| {
-                NotificationListMsg::Notify(NotificationItemInit {
+            .forward(sender.input_sender(), |msg| match msg {
+                AuthUiOutput::ShowError(error) => AppMsg::ShowNotification(NotificationItemInit {
                     markup_text: error,
                     message_type: gtk4::MessageType::Error,
-                })
+                }),
+                AuthUiOutput::SessionStarted => AppMsg::SessionStarted,
             });
 
         let reboot_btn = ActionButton::builder()
@@ -220,9 +223,12 @@ where
     }
 
     fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+        use AppMsg as I;
         match message {
-            AppMsg::Reboot => exec(&self.reboot_cmd),
-            AppMsg::Poweroff => exec(&self.poweroff_cmd),
+            I::Reboot => exec(&self.reboot_cmd),
+            I::Poweroff => exec(&self.poweroff_cmd),
+            I::ShowNotification(item) => self.notifications.emit(NotificationListMsg::Notify(item)),
+            I::SessionStarted => relm4::main_application().quit(),
         }
     }
 }
