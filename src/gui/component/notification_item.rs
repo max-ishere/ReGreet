@@ -34,6 +34,7 @@ impl FactoryComponent for NotificationItem {
                 },
 
                 gtk::Label {
+                    set_xalign: 0.,
                     set_max_width_chars: 30,
                     set_width_chars: 30,
                     set_wrap: true,
