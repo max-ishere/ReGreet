@@ -51,11 +51,14 @@ use std::fmt::{Debug, Display};
 
 use thiserror::Error;
 
+#[cfg(debug_assertions)]
 #[doc(hidden)]
 pub use demo::*;
 
 #[doc(hidden)]
 mod async_sock_impl;
+
+#[cfg(debug_assertions)]
 #[doc(hidden)]
 mod demo;
 

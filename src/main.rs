@@ -20,7 +20,7 @@ use clap::{Parser, ValueEnum};
 use config::{AppearanceConfig, BackgroundConfig, Config, SystemCommandsConfig};
 use constants::{CACHE_LIMIT, CACHE_PATH};
 use file_rotate::{compression::Compression, suffix::AppendCount, ContentLimit, FileRotate};
-use greetd::{DemoGreetd, Greetd};
+use greetd::Greetd;
 use gtk4::glib::markup_escape_text;
 use gtk4::MessageType;
 use gui::component::{App, AppInit, GreetdState, NotificationItemInit};
@@ -77,11 +77,13 @@ struct Args {
     config: PathBuf,
 
     /// Run in demo mode
+    #[cfg(debug_assertions)]
     #[arg(long)]
     demo: bool,
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
     let Args {
         logs,
         log_level,
@@ -89,6 +91,17 @@ fn main() {
         config,
         demo,
     } = Args::parse();
+
+    #[cfg(not(debug_assertions))]
+    let Args {
+        logs,
+        log_level,
+        verbose,
+        config,
+    } = Args::parse();
+    #[cfg(not(debug_assertions))]
+    let demo: bool = false;
+
     // Keep the guard alive till the end of the function, since logging depends on this.
     let (_guard, errors) = init_logging(&logs, &log_level, verbose);
 
@@ -105,26 +118,33 @@ async fn async_main(config: PathBuf, demo: bool, mut errors: Vec<NotificationIte
     let (cache, mut config, users, new_errors) = load_files(config).await;
     errors.extend(new_errors);
 
-    if demo {
+    #[cfg(debug_assertions)]
+    {
         config.commands.reboot = vec![];
         config.commands.poweroff = vec![];
 
-        let greetd_state = GreetdState::NotCreated(DemoGreetd {});
+        if demo {
+            let greetd_state = GreetdState::NotCreated(greetd::DemoGreetd {});
 
-        spawn_blocking(move || {
-            let app = RelmApp::new(APP_ID);
-            app.run::<App<DemoGreetd>>(mk_app_init(greetd_state, cache, users, config, errors))
-        })
-        .await
-        .unwrap();
+            spawn_blocking(move || {
+                let app = RelmApp::new(APP_ID);
+                app.run::<App<greetd::DemoGreetd>>(mk_app_init(
+                    greetd_state,
+                    cache,
+                    users,
+                    config,
+                    errors,
+                ))
+            })
+            .await
+            .unwrap();
 
-        return;
+            return;
+        }
     }
 
     let socket_path = env::var("GREETD_SOCK").unwrap();
-
     let socket = UnixStream::connect(socket_path).await.unwrap();
-
     let greetd_state = GreetdState::NotCreated(socket);
 
     spawn_blocking(move || {
