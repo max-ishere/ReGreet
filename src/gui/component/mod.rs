@@ -93,7 +93,7 @@ where
                 add_overlay = &gtk::Frame {
                     set_margin_all: 15,
                     set_halign: gtk::Align::Start,
-                    set_valign: gtk::Align::Center,
+                    set_valign: gtk::Align::End,
                     inline_css: "background-color: @theme_bg_color",
 
                     gtk::Box {
@@ -191,7 +191,7 @@ where
                 label: Some("Reboot".to_string()),
                 icon: "system-reboot".to_string(),
                 tooltip: Some("Reboot the system".to_string()),
-                css_classes: vec!["destructive-action".to_string()],
+                require_confirm: true,
             })
             .forward(
                 sender.input_sender(),
@@ -203,7 +203,7 @@ where
                 label: Some("Shutdown".to_string()),
                 icon: "system-shutdown".to_string(),
                 tooltip: Some("Shutdown the system".to_string()),
-                css_classes: vec!["destructive-action".to_string()],
+                require_confirm: true,
             })
             .forward(
                 sender.input_sender(),
