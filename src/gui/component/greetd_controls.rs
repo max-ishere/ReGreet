@@ -44,6 +44,10 @@ where
     /// Use of tracker::track would not solve the issue because we want to perform a reset only after an authentication
     /// has succeeded or when a session is created.
     reset_question_inputs_event: bool,
+
+    /// An event to perform actions when the page is switched. For example, focus the button/input. Can't `#[watch]`
+    /// these calls because the widget receives updates from the outside that may change focus from the origin widget.
+    just_switched_screens_event: bool,
 }
 
 #[derive(Derivative)]
@@ -237,7 +241,7 @@ where
                     append = &LoginBox {
                         #[template] CancelButton { connect_clicked => GreetdControlsMsg::Cancel },
                         #[template] LoginButton {
-                            #[watch]
+                            #[track( model.just_switched_screens_event )]
                             grab_focus: (),
 
                             connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
@@ -253,7 +257,7 @@ where
 
                     #[template]
                     append = &AuthMessageLabel {
-                        #[watch]
+                        #[track( model.just_switched_screens_event )]
                         set_text: question.auth_question().prompt(),
                     },
 
@@ -264,7 +268,7 @@ where
 
                             #[name = "password_entry"]
                             gtk::PasswordEntry {
-                                #[watch]
+                                #[track( model.just_switched_screens_event )]
                                 set_placeholder_text: Some(prompt),
 
                                 #[track( model.reset_question_inputs_event )]
@@ -272,7 +276,7 @@ where
 
                                 set_show_peek_icon: true,
 
-                                #[track( model.reset_question_inputs_event )]
+                                #[track( model.just_switched_screens_event )]
                                 grab_focus: (),
 
                                 connect_activate[sender] => move |this| {
@@ -299,13 +303,13 @@ where
 
                             #[name = "visible_entry"]
                             gtk::Entry {
-                                #[watch]
+                                #[track( model.just_switched_screens_event )]
                                 set_placeholder_text: Some(prompt),
 
                                 #[track( model.reset_question_inputs_event )]
                                 set_text: "",
 
-                                #[track( model.reset_question_inputs_event )]
+                                #[track( model.just_switched_screens_event )]
                                 grab_focus: (),
 
                                 connect_activate[sender] => move |this| {
@@ -334,24 +338,41 @@ where
 
                     gtk::Separator,
 
+                    // TODO: Refactor this to reuse the infobar and use Revealer on LoginBox
                     append = match state {
-                        GreetdInformativeState::NotSent(informative) => &gtk::Frame {
-                            gtk::InfoBar {
-                                set_show_close_button: false,
-
-                                #[watch]
-                                set_message_type: match informative.auth_informative() {
-                                    AuthInformative::Info(_) => gtk::MessageType::Question,
-                                    AuthInformative::Error(_) => gtk::MessageType::Error,
-                                },
-
-                                #[template]
-                                AuthMessageLabel {
-                                    set_wrap: true,
+                        GreetdInformativeState::NotSent(informative) => &gtk::Box {
+                            gtk::Frame {
+                                gtk::InfoBar {
+                                    set_show_close_button: false,
 
                                     #[watch]
-                                    set_text: informative.auth_informative().prompt(),
+                                    set_message_type: match informative.auth_informative() {
+                                        AuthInformative::Info(_) => gtk::MessageType::Question,
+                                        AuthInformative::Error(_) => gtk::MessageType::Error,
+                                    },
+
+                                    #[template]
+                                    AuthMessageLabel {
+                                        set_wrap: true,
+
+                                        #[watch]
+                                        set_text: informative.auth_informative().prompt(),
+                                    },
+
                                 }
+                            },
+
+                            #[template]
+                            append = &LoginBox {
+                                #[template] CancelButton {
+                                    connect_clicked => GreetdControlsMsg::Cancel
+                                },
+                                #[template] LoginButton {
+                                    #[track( model.just_switched_screens_event )]
+                                    grab_focus: (),
+
+                                    connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
+                                },
                             }
                         },
 
@@ -389,23 +410,6 @@ where
                             }
                         }
                     },
-
-
-                    #[template]
-                    append = &LoginBox {
-                        #[template] CancelButton {
-                            #[watch]
-                            set_sensitive: matches!(state, GreetdInformativeState::NotSent(_)),
-
-                            connect_clicked => GreetdControlsMsg::Cancel
-                        },
-                        #[template] LoginButton {
-                            #[watch]
-                            grab_focus: (),
-
-                            connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
-                        },
-                    }
                 }
 
                 GreetdState::Loading(message) => gtk::Frame {
@@ -442,6 +446,7 @@ where
                 GreetdState::NotCreated(_) => gtk::Box {
                     set_halign: gtk::Align::End,
                     #[template] LoginButton {
+                        #[track( model.just_switched_screens_event )]
                         grab_focus: (),
 
                         connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
@@ -470,6 +475,7 @@ where
             env,
 
             reset_question_inputs_event: false,
+            just_switched_screens_event: true,
         };
         let widgets = view_output!();
 
@@ -482,6 +488,7 @@ where
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         self.reset_question_inputs_event = false;
+        self.just_switched_screens_event = false;
 
         match message {
             GreetdControlsMsg::Cancel => {
@@ -495,9 +502,7 @@ where
 
             GreetdControlsMsg::UpdateUser(username) => self.change_user(username),
 
-            GreetdControlsMsg::UpdateSession(command) => {
-                self.command = command;
-            }
+            GreetdControlsMsg::UpdateSession(command) => self.command = command,
         };
 
         if let GreetdState::NotCreated(_) = self.greetd_state {
@@ -517,6 +522,8 @@ where
         sender: ComponentSender<Self>,
         _root: &Self::Root,
     ) {
+        self.just_switched_screens_event = true;
+
         let CommandOutput::GreetdResponse {
             greetd_state,
             error,
