@@ -283,15 +283,14 @@ where
                 let cache = take(&mut self.cache);
                 let send = sender.clone();
                 sender.command(move |_, _| async move {
-                    let Err(e) = cache
+                    match cache
                         .save(CACHE_PATH, CACHE_LIMIT)
                         .await
                         .with_context(|| format!("Failed to save the cache file `{CACHE_PATH}`"))
-                    else {
-                        return;
-                    };
-
-                    error!("{e:?}");
+                    {
+                        Err(e) => error!("{e:?}"),
+                        Ok(()) => (),
+                    }
 
                     send.output(AuthUiOutput::SessionStarted).unwrap();
                 })
