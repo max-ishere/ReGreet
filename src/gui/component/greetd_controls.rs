@@ -688,7 +688,34 @@ where
 
         match greetd_state {
             S::Loading(old) => self.greetd_state = S::Loading(old),
-            S::Startable(startable) => self.greetd_state = GreetdState::Startable(startable),
+            S::Startable(startable) => match &self.command {
+                Some(command) => {
+                    let env = self.env.clone();
+                    let command = command.clone();
+                    sender.oneshot_command(async {
+                        let (greetd_state, error) =
+                            try_start_session(startable, GreetdState::Startable, command, env)
+                                .await;
+
+                        CommandOutput::GreetdResponse {
+                            greetd_state,
+                            error,
+                        }
+                    });
+
+                    self.greetd_state = GreetdState::Loading("Starting session".to_string());
+                }
+
+                None => {
+                    sender
+                        .output(GreetdControlsOutput::NotifyError(
+                            "Selected session cannot be executed because it is invalid".to_string(),
+                        ))
+                        .expect("auth view controller should not be dropped");
+
+                    self.greetd_state = GreetdState::Startable(startable);
+                }
+            },
 
             S::NotCreated(client) => {
                 let username = self.username.clone();
@@ -738,7 +765,7 @@ where
                 ))
                 .unwrap(),
 
-            S::SessionStarted => {}
+            S::SessionStarted => (),
         };
     }
 
