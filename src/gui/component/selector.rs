@@ -286,12 +286,7 @@ impl SimpleComponent for Selector {
                     EntryOrDropDown::DropDown(last) => self.last_option_id = last.clone(),
                 }
 
-                // TODO: Does not verify if the selection of type DropDown is a valid one!
                 self.selection = selection;
-
-                sender
-                    .output(SelectorOutput::CurrentSelection(self.selection.clone()))
-                    .expect("Cannot update the parent's selection triggered by a set signal");
             }
         }
     }

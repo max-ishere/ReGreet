@@ -29,7 +29,6 @@ use sysutil::SystemUsersAndSessions;
 use tokio::net::UnixStream;
 use tokio::task::spawn_blocking;
 use tracing::subscriber::set_global_default;
-use tracing::{error, warn};
 use tracing_appender::{non_blocking, non_blocking::WorkerGuard};
 use tracing_subscriber::{
     filter::LevelFilter, fmt::layer, fmt::time::OffsetTime, layer::SubscriberExt,
@@ -39,6 +38,9 @@ use crate::constants::{APP_ID, CONFIG_PATH, LOG_PATH};
 
 #[macro_use]
 extern crate async_recursion;
+
+#[macro_use]
+extern crate tracing;
 
 #[cfg(test)]
 #[macro_use]

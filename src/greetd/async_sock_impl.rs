@@ -7,7 +7,6 @@ use std::marker::Unpin;
 
 use greetd_ipc::{codec::TokioCodec, AuthMessageType, ErrorType, Request, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tracing::debug;
 
 use crate::{greetd::RequestError, greetd_response};
 

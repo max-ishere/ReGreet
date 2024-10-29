@@ -15,7 +15,6 @@ use pwd::Passwd;
 use thiserror::Error;
 use tokio::fs::{read, read_dir, read_to_string};
 use tokio::task::spawn_blocking;
-use tracing::{debug, warn};
 
 /// Stores info of all regular users and sessions
 #[derive(Default, Debug)]
@@ -28,7 +27,7 @@ pub struct SystemUsersAndSessions {
 
 #[derive(Default, Debug)]
 pub struct User {
-    pub full_name: String,
+    pub full_name: Option<String>,
     // TODO: there should be separate UI for selecting a shell due to special meaning of the dropdown and how it translates to a cache type
     // Potentially make the session label into a dropdown that selects [session, shell, command]
     login_shell: Option<String>,
@@ -92,13 +91,6 @@ impl SystemUsersAndSessions {
                     }
 
                     name.to_owned()
-                })
-                .unwrap_or({
-                    debug!(
-                        "User {} has no full name specified in gecos (/etc/passwd field)",
-                        entry.name
-                    );
-                    entry.name.clone()
                 });
 
             let login_shell = (!entry.shell.is_empty()).then_some(entry.shell);

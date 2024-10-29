@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::mem::take;
 
-use anyhow::Context;
-use derivative::Derivative;
-use relm4::{gtk::prelude::*, prelude::*};
-use tracing::error;
-
 use crate::cache::SessionIdOrCmdline;
 use crate::constants::{CACHE_LIMIT, CACHE_PATH};
 use crate::sysutil::SessionInfo;
 use crate::{cache::Cache, greetd::Greetd};
+use anyhow::Context;
+use derivative::Derivative;
+use relm4::{gtk::prelude::*, prelude::*};
 
 use super::{
     EntryOrDropDown, GreetdControls, GreetdControlsInit, GreetdControlsMsg, GreetdControlsOutput,
@@ -25,7 +23,7 @@ pub struct AuthUiInit<Client>
 where
     Client: Greetd,
 {
-    pub users: HashMap<String, String>,
+    pub users: HashMap<String, Option<String>>,
     pub sessions: HashMap<String, SessionInfo>,
     pub env: HashMap<String, String>,
 
@@ -40,16 +38,19 @@ where
     Client: Greetd + 'static + Debug,
 {
     cache: Cache,
+    user_gecos: HashMap<String, Option<String>>,
 
     current_username: String,
     current_session: EntryOrDropDown,
+
+    authenticating_as: Option<String>,
 
     #[doc(hidden)]
     user_selector: Controller<Selector>,
     #[doc(hidden)]
     session_selector: Controller<Selector>,
     #[doc(hidden)]
-    auth_view: Controller<GreetdControls<Client>>,
+    greetd_controls: Controller<GreetdControls<Client>>,
 }
 
 #[derive(Debug)]
@@ -65,8 +66,8 @@ pub enum AuthUiMsg {
     SessionChanged(Option<Vec<String>>),
     ShowError(String),
 
-    LockUserSelectors,
-    UnlockUserSelectors,
+    CreatedSessionFor(String),
+    SessionCanceledFor(String),
 
     SessionStarted,
 }
@@ -90,7 +91,21 @@ where
                 set_label: "User",
             },
 
-            attach[1, USER_ROW, 1, 1] = model.user_selector.widget(),
+            attach[1, USER_ROW, 1, 1] = match &model.authenticating_as {
+                None => *model.user_selector.widget(),
+                Some(username) => &gtk::Frame {
+                    gtk::Label {
+                        set_xalign: -1.,
+
+                        #[watch]
+                        set_text: &model.user_gecos
+                        .get(username)
+                        .and_then(Option::as_ref)
+                        .map(|gecos| format!("{gecos} (@{})", username))
+                        .unwrap_or_else(||format!("@{}", username)),
+                    }
+                }
+            },
 
             #[template]
             attach[0, SESSION_ROW, 1, 1] = &SelectorLabel {
@@ -99,7 +114,7 @@ where
 
             attach[1, SESSION_ROW, 1, 1] = model.session_selector.widget(),
 
-            attach[0, AUTH_ROW, 2, 1] = model.auth_view.widget(),
+            attach[0, AUTH_ROW, 2, 1] = model.greetd_controls.widget(),
         }
     }
 
@@ -143,10 +158,10 @@ where
         };
 
         let user_options = users
-            .into_iter()
+            .iter()
             .map(|(system, display)| SelectorOption {
-                id: system,
-                text: display,
+                id: system.clone(),
+                text: display.as_ref().unwrap_or(system).clone(),
             })
             .collect();
 
@@ -197,7 +212,7 @@ where
                 Self::Input::SessionChanged(cmdline)
             });
 
-        let auth_view = GreetdControls::builder()
+        let greetd_controls = GreetdControls::builder()
             .launch(GreetdControlsInit {
                 greetd_state,
                 username: initial_user.clone(),
@@ -210,21 +225,24 @@ where
 
                 match output {
                     O::NotifyError(error) => I::ShowError(error),
-                    O::LockUserSelectors => I::LockUserSelectors,
-                    O::UnlockUserSelectors => I::UnlockUserSelectors,
+                    O::CreatedSessionFor(username) => I::CreatedSessionFor(username),
+                    O::SessionCanceledFor(username) => I::SessionCanceledFor(username),
                     O::SessionStarted => I::SessionStarted,
                 }
             });
 
         let model = Self {
             cache,
+            user_gecos: users,
 
             current_username: initial_user,
             current_session: initial_session,
 
+            authenticating_as: None,
+
             user_selector,
             session_selector,
-            auth_view,
+            greetd_controls,
         };
         let widgets = view_output!();
 
@@ -239,7 +257,7 @@ where
                     EntryOrDropDown::DropDown(username) => username,
                     EntryOrDropDown::Entry(username) => username,
                 };
-                self.auth_view
+                self.greetd_controls
                     .emit(GreetdControlsMsg::UpdateUser(username.clone()));
 
                 let Some(last_session) = self.cache.last_user_session(&username) else {
@@ -255,12 +273,26 @@ where
                     }));
             }
 
-            I::SessionChanged(entry) => {
-                self.auth_view.emit(GreetdControlsMsg::UpdateSession(entry))
-            }
+            I::SessionChanged(entry) => self
+                .greetd_controls
+                .emit(GreetdControlsMsg::UpdateSession(entry)),
 
-            I::LockUserSelectors => self.user_selector.emit(SelectorMsg::Lock),
-            I::UnlockUserSelectors => self.user_selector.emit(SelectorMsg::Unlock),
+            I::CreatedSessionFor(username) => {
+                self.user_selector.emit(SelectorMsg::Lock);
+                self.authenticating_as = Some(username);
+            }
+            I::SessionCanceledFor(username) => {
+                self.user_selector.emit(SelectorMsg::Unlock);
+
+                let selection = match self.user_gecos.get(&username) {
+                    Some(_) => EntryOrDropDown::DropDown(username),
+                    None => EntryOrDropDown::Entry(username),
+                };
+
+                self.user_selector.emit(SelectorMsg::Set(selection));
+
+                self.authenticating_as = None;
+            }
 
             I::ShowError(error) => {
                 error!("ShowError messsage: {error}");
@@ -303,7 +335,7 @@ where
 impl WidgetTemplate for SelectorLabel {
     view! {
         gtk::Label {
-            set_xalign: 1.0,
+            set_xalign: 1.,
         }
     }
 }

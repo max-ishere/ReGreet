@@ -2,7 +2,6 @@ use std::{fmt::Debug, mem::replace};
 
 use derivative::Derivative;
 use relm4::{gtk::prelude::*, prelude::*};
-use tracing::{debug, error};
 
 use crate::greetd::{
     AuthInformative, AuthInformativeResponse, AuthQuestion, AuthQuestionResponse, AuthResponse,
@@ -32,6 +31,9 @@ pub struct GreetdControls<Client>
 where
     Client: Greetd + 'static,
 {
+    /// Stores the last output session+user state
+    last_communicated_session_state: SessionState,
+
     /// Represents what UI is shown to the user.
     greetd_state: GreetdState<Client>,
     /// Username to use when creating a new session.
@@ -49,6 +51,11 @@ where
     /// An event to perform actions when the page is switched. For example, focus the button/input. Can't `#[watch]`
     /// these calls because the widget receives updates from the outside that may change focus from the origin widget.
     just_switched_screens_event: bool,
+}
+
+enum SessionState {
+    NotCreated,
+    Created,
 }
 
 #[derive(Derivative)]
@@ -116,17 +123,18 @@ pub enum GreetdControlsOutput {
     /// Tell the parent to show an error that occured during greetd IPC communication.
     NotifyError(String),
 
-    /// Emited whenever this UI demands it recieves no user switching requests because a user switch cannot be guaranteed
-    /// to be successful (a divertion of the user displayed in the UI and in the created session is forbidden). If the
-    /// user switch fails it may leave the UI in an inconsistent state (mitigated by a panic).
+    /// Emited to signal that a session for this username has been created and the username cannot be changed without
+    /// canceling the current session.
     ///
-    /// # Panics
+    /// This output should be handled by locking the user selection input. This widget will ignore all [`UpdateUser`]
+    /// input messages until [`SessionCanceledFor`] is emited. Use the username value in this output to display an
+    /// accurate username in the UI.
     ///
-    /// To avoid panics, ensure all user switching UI is locked.
-    LockUserSelectors,
+    /// [`UpdateUser`]: GreetdControlsMsg::UpdateUser
+    CreatedSessionFor(String),
 
     /// The widget is capable of handling user switching again.
-    UnlockUserSelectors,
+    SessionCanceledFor(String),
 
     /// Emited when the IPC start_session request succeeds.
     SessionStarted,
@@ -456,6 +464,11 @@ where
         } = init;
 
         let model = Self {
+            last_communicated_session_state: if matches!(greetd_state, GreetdState::NotCreated(_)) {
+                SessionState::NotCreated
+            } else {
+                SessionState::Created
+            },
             greetd_state,
             username,
             command: Some(command),
@@ -492,15 +505,7 @@ where
             GreetdControlsMsg::UpdateSession(command) => self.command = command,
         };
 
-        if let GreetdState::NotCreated(_) = self.greetd_state {
-            sender
-                .output(GreetdControlsOutput::UnlockUserSelectors)
-                .unwrap();
-        } else {
-            sender
-                .output(GreetdControlsOutput::LockUserSelectors)
-                .unwrap();
-        }
+        self.communicate_session_state(&sender);
     }
 
     fn update_cmd(
@@ -581,15 +586,7 @@ where
             other => other,
         };
 
-        if let GreetdState::NotCreated(_) = self.greetd_state {
-            sender
-                .output(GreetdControlsOutput::UnlockUserSelectors)
-                .unwrap();
-        } else {
-            sender
-                .output(GreetdControlsOutput::LockUserSelectors)
-                .unwrap();
-        }
+        self.communicate_session_state(&sender);
 
         if matches!(
             (error, &self.greetd_state),
@@ -604,7 +601,36 @@ impl<Client> GreetdControls<Client>
 where
     Client: Greetd + 'static + Debug,
 {
-    pub fn cancel_session(&mut self, sender: &ComponentSender<Self>) {
+    fn communicate_session_state(&mut self, sender: &ComponentSender<Self>) {
+        // Only communicate session created state once, when the state actually changes.
+        match (&self.last_communicated_session_state, &self.greetd_state) {
+            (SessionState::Created, GreetdState::NotCreated(_)) => {
+                sender
+                    .output(GreetdControlsOutput::SessionCanceledFor(
+                        self.username.clone(),
+                    ))
+                    .unwrap();
+
+                self.last_communicated_session_state = SessionState::NotCreated
+            }
+
+            (SessionState::NotCreated, created)
+                if !matches!(created, GreetdState::NotCreated(_)) =>
+            {
+                sender
+                    .output(GreetdControlsOutput::CreatedSessionFor(
+                        self.username.clone(),
+                    ))
+                    .unwrap();
+
+                self.last_communicated_session_state = SessionState::Created
+            }
+
+            _ => (),
+        }
+    }
+
+    fn cancel_session(&mut self, sender: &ComponentSender<Self>) {
         use GreetdState as S;
 
         let greetd_state = replace(&mut self.greetd_state, S::loading("Canceling session"));
@@ -730,10 +756,7 @@ where
 
         match &self.greetd_state {
             S::NotCreated(_) => self.username = username,
-            _ => {
-                // TODO: The selector may be locked but a change user message could still be pending in the queue
-                unreachable!("The user cannot be switched in this Greetd IPC state without a chance of it failing. Please ensure the controls are locked.")
-            }
+            _ => (),
         }
     }
 }

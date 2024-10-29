@@ -10,7 +10,6 @@ use relm4::{
     gtk::{prelude::*, ContentFit},
     prelude::*,
 };
-use tracing::{debug, error, info};
 
 use crate::{cache::Cache, greetd::Greetd, sysutil::SessionInfo};
 use action_button::*;
@@ -33,7 +32,7 @@ pub struct AppInit<Client>
 where
     Client: Greetd,
 {
-    pub users: HashMap<String, String>,
+    pub users: HashMap<String, Option<String>>,
     pub sessions: HashMap<String, SessionInfo>,
     pub env: HashMap<String, String>,
 
