@@ -107,6 +107,8 @@ impl SimpleComponent for Selector {
 
                             sender.input(
                                 Self::Input::UpdateSelection(
+                                    // TODO: Instead of unwrapping active ID, handle the none by flipping the ...
+                                    // selector to entry mode
                                     EntryOrDropDown::DropDown(dropdown.active_id().unwrap().to_string())
                                 )
                             )
@@ -284,6 +286,7 @@ impl SimpleComponent for Selector {
                     EntryOrDropDown::DropDown(last) => self.last_option_id = last.clone(),
                 }
 
+                // TODO: Does not verify if the selection of type DropDown is a valid one!
                 self.selection = selection;
 
                 sender

@@ -16,11 +16,13 @@ where
 {
     /// Initial session state. This way you can present a password prompt immediately on startup.
     pub greetd_state: GreetdState<Client>,
+
     /// Specifies what username should be used when creating a session.
-    /// This is stored in the model and when the username changes the previous session is canceled.
     pub username: String,
+
     /// What command to execute when the session is started.
     pub command: Vec<String>,
+
     /// What env to use when the session is started.
     pub env: Vec<String>,
 }
@@ -32,12 +34,11 @@ where
 {
     /// Represents what UI is shown to the user.
     greetd_state: GreetdState<Client>,
-    /// Username to use when creating a new session. When a different username is set by the parent widget, the current
-    /// session is canceled.
+    /// Username to use when creating a new session.
     username: String,
     /// Command to use when starting a session. This is updated by the parent widget.
     command: Option<Vec<String>>,
-    /// Env to use when starting a session. This is updated by the parent widget.
+    /// Env to use when starting a session.
     env: Vec<String>,
 
     /// A bool to conditionally reset the question inputs.
@@ -70,29 +71,44 @@ where
     },
 
     /// An informative auth prompt from greetd. Looks like an info box with the message type set according to what the prompt is - info or error.
-    AuthInformative(GreetdInformativeState<Client>),
+    AuthInformative(#[derivative(Debug = "ignore")] Client::AuthInformative),
 
     /// Used as a placeholder to do 2 things.
     /// 1. Lock the UI while a greetd operation takes place (shows an info box with no buttons).
     /// 2. A temporary value that can be used to move session state out of `&mut self`
-    Loading(
-        /// Message shown while an operation is pending. This will always be an info message type.
-        String,
-    ),
+    Loading {
+        /// Text inside the [`InfoBar`]
+        ///
+        /// [`InfoBar`]: gtk::InfoBar
+        message: String,
+
+        /// How the [`InfoBar`] should be styled.
+        ///
+        /// [`InfoBar`]: gtk::InfoBar
+        message_type: gtk::MessageType,
+    },
 
     /// A value to indicate that a session start request has succeeded and it is time to exit
     SessionStarted,
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub enum GreetdInformativeState<Client>
+impl<Client> GreetdState<Client>
 where
     Client: Greetd,
 {
-    NotSent(#[derivative(Debug = "ignore")] Client::AuthInformative),
-    WaitingForInfo(String),
-    WaitingForError(String),
+    fn loading(msg: &str) -> Self {
+        Self::Loading {
+            message: msg.to_string(),
+            message_type: gtk::MessageType::Info,
+        }
+    }
+
+    fn loading_with_error(error: &str) -> Self {
+        Self::Loading {
+            message: error.to_string(),
+            message_type: gtk::MessageType::Error,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -332,98 +348,69 @@ where
                     },
                 }
 
-                GreetdState::AuthInformative(state) => gtk::Box {
+                GreetdState::AuthInformative(informative) => gtk::Box {
                     set_spacing: 15,
                     set_orientation: gtk::Orientation::Vertical,
 
                     gtk::Separator,
 
                     // TODO: Refactor this to reuse the infobar and use Revealer on LoginBox
-                    append = match state {
-                        GreetdInformativeState::NotSent(informative) => &gtk::Box {
-                            gtk::Frame {
-                                gtk::InfoBar {
-                                    set_show_close_button: false,
+                    append =  &gtk::Box {
+                        gtk::Frame {
+                            gtk::InfoBar {
+                                set_show_close_button: false,
+
+                                #[watch]
+                                set_message_type: match informative.auth_informative() {
+                                    AuthInformative::Info(_) => gtk::MessageType::Question,
+                                    AuthInformative::Error(_) => gtk::MessageType::Error,
+                                },
+
+                                #[template]
+                                AuthMessageLabel {
+                                    set_wrap: true,
 
                                     #[watch]
-                                    set_message_type: match informative.auth_informative() {
-                                        AuthInformative::Info(_) => gtk::MessageType::Question,
-                                        AuthInformative::Error(_) => gtk::MessageType::Error,
-                                    },
-
-                                    #[template]
-                                    AuthMessageLabel {
-                                        set_wrap: true,
-
-                                        #[watch]
-                                        set_text: informative.auth_informative().prompt(),
-                                    },
-
-                                }
-                            },
-
-                            #[template]
-                            append = &LoginBox {
-                                #[template] CancelButton {
-                                    connect_clicked => GreetdControlsMsg::Cancel
+                                    set_text: informative.auth_informative().prompt(),
                                 },
-                                #[template] LoginButton {
-                                    #[track( model.just_switched_screens_event )]
-                                    grab_focus: (),
 
-                                    connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
-                                },
                             }
                         },
 
-                        GreetdInformativeState::WaitingForInfo(prompt) => &gtk::Frame {
-                            gtk::InfoBar {
-                                set_show_close_button: false,
+                        #[template]
+                        append = &LoginBox {
+                            #[template] CancelButton {
+                                connect_clicked => GreetdControlsMsg::Cancel
+                            },
+                            #[template] LoginButton {
+                                #[track( model.just_switched_screens_event )]
+                                grab_focus: (),
 
-                                #[watch]
-                                set_message_type: gtk::MessageType::Info,
-
-                                #[template]
-                                AuthMessageLabel {
-                                    set_wrap: true,
-
-                                    #[watch]
-                                    set_text: prompt,
-                                }
-                            }
-                        }
-
-                        GreetdInformativeState::WaitingForError(prompt) => &gtk::Frame {
-                            gtk::InfoBar {
-                                set_show_close_button: false,
-
-                                #[watch]
-                                set_message_type: gtk::MessageType::Error,
-
-                                #[template]
-                                AuthMessageLabel {
-                                    set_wrap: true,
-
-                                    #[watch]
-                                    set_text: prompt,
-                                }
-                            }
+                                connect_clicked => GreetdControlsMsg::AdvanceAuthentication(None),
+                            },
                         }
                     },
                 }
 
-                GreetdState::Loading(message) => gtk::Frame {
-                    gtk::InfoBar {
-                        set_show_close_button: false,
-                        set_message_type: gtk::MessageType::Info,
+                GreetdState::Loading{message, message_type} => gtk::Box {
+                    set_spacing: 15,
+                    set_orientation: gtk::Orientation::Vertical,
 
-                        gtk::Separator,
+                    gtk::Separator,
 
-                        #[template]
-                        AuthMessageLabel {
+                    append = &gtk::Frame {
+                        gtk::InfoBar {
+                            set_show_close_button: false,
+
                             #[watch]
-                            set_text: message.as_str(),
-                            set_valign: gtk::Align::Start,
+                            set_message_type: *message_type,
+
+                            #[template]
+                            AuthMessageLabel {
+                                #[watch]
+                                set_text: message.as_str(),
+                                set_valign: gtk::Align::Start,
+                            }
                         }
                     }
                 }
@@ -552,7 +539,7 @@ where
                         }
                     });
 
-                    GreetdState::Loading("Starting session".to_string())
+                    GreetdState::loading("Starting session")
                 }
 
                 None => {
@@ -566,18 +553,15 @@ where
                 }
             },
 
-            GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative)) => {
-                let new_state = informative.auth_informative().into();
+            GreetdState::AuthInformative(informative) => {
+                let loading_state = match informative.auth_informative() {
+                    AuthInformative::Error(error) => GreetdState::loading_with_error(error),
+                    AuthInformative::Info(msg) => GreetdState::loading(msg),
+                };
 
                 sender.oneshot_command(async {
-                    let (greetd_state, error) = try_auth(
-                        informative,
-                        |state| {
-                            GreetdState::AuthInformative(GreetdInformativeState::NotSent(state))
-                        },
-                        None,
-                    )
-                    .await;
+                    let (greetd_state, error) =
+                        try_auth(informative, GreetdState::AuthInformative, None).await;
 
                     CommandOutput::GreetdResponse {
                         greetd_state,
@@ -585,7 +569,7 @@ where
                     }
                 });
 
-                GreetdState::AuthInformative(new_state)
+                loading_state
             }
 
             GreetdState::SessionStarted => {
@@ -623,13 +607,10 @@ where
     pub fn cancel_session(&mut self, sender: &ComponentSender<Self>) {
         use GreetdState as S;
 
-        let greetd_state = replace(
-            &mut self.greetd_state,
-            S::Loading(String::from("Canceling session")),
-        );
+        let greetd_state = replace(&mut self.greetd_state, S::loading("Canceling session"));
 
         match greetd_state {
-            S::Loading(old) => self.greetd_state = S::Loading(old),
+            old @ S::Loading { .. } => self.greetd_state = old,
             S::NotCreated(client) => self.greetd_state = GreetdState::NotCreated(client),
 
             S::Startable(client) => sender.oneshot_command(async {
@@ -651,24 +632,14 @@ where
                 }
             }),
 
-            S::AuthInformative(GreetdInformativeState::NotSent(session)) => {
-                sender.oneshot_command(async {
-                    let (greetd_state, error) = try_cancel(session, |state| {
-                        S::AuthInformative(GreetdInformativeState::NotSent(state))
-                    })
-                    .await;
+            S::AuthInformative(session) => sender.oneshot_command(async {
+                let (greetd_state, error) = try_cancel(session, S::AuthInformative).await;
 
-                    CommandOutput::GreetdResponse {
-                        greetd_state,
-                        error,
-                    }
-                })
-            }
-            S::AuthInformative(_) => sender
-                .output(GreetdControlsOutput::NotifyError(
-                    "An operation is currently pending, cannot cancel.".to_string(),
-                ))
-                .unwrap(),
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
 
             S::SessionStarted => (),
         };
@@ -681,13 +652,10 @@ where
     ) {
         use GreetdState as S;
 
-        let greetd_state = replace(
-            &mut self.greetd_state,
-            S::Loading(String::from("Authenticating")),
-        );
+        let greetd_state = replace(&mut self.greetd_state, S::loading("Authenticating"));
 
         match greetd_state {
-            S::Loading(old) => self.greetd_state = S::Loading(old),
+            old @ S::Loading { .. } => self.greetd_state = old,
             S::Startable(startable) => match &self.command {
                 Some(command) => {
                     let env = self.env.clone();
@@ -703,7 +671,7 @@ where
                         }
                     });
 
-                    self.greetd_state = GreetdState::Loading("Starting session".to_string());
+                    self.greetd_state = GreetdState::loading("Starting session");
                 }
 
                 None => {
@@ -744,26 +712,14 @@ where
                 }
             }),
 
-            S::AuthInformative(GreetdInformativeState::NotSent(informative)) => sender
-                .oneshot_command(async {
-                    let (greetd_state, error) = try_auth(
-                        informative,
-                        |state| S::AuthInformative(GreetdInformativeState::NotSent(state)),
-                        None,
-                    )
-                    .await;
+            S::AuthInformative(informative) => sender.oneshot_command(async {
+                let (greetd_state, error) = try_auth(informative, S::AuthInformative, None).await;
 
-                    CommandOutput::GreetdResponse {
-                        greetd_state,
-                        error,
-                    }
-                }),
-
-            S::AuthInformative(_) => sender
-                .output(GreetdControlsOutput::NotifyError(
-                    "An operation is currently pending, cannot cancel".to_string(),
-                ))
-                .unwrap(),
+                CommandOutput::GreetdResponse {
+                    greetd_state,
+                    error,
+                }
+            }),
 
             S::SessionStarted => (),
         };
@@ -830,9 +786,7 @@ where
         match session {
             R::Success(startable) => GreetdState::Startable(startable),
             R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
-            R::AuthInformative(informative) => {
-                GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative))
-            }
+            R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
         },
         None,
     )
@@ -889,22 +843,8 @@ where
         match session {
             R::Success(startable) => GreetdState::Startable(startable),
             R::AuthQuestion(question) => GreetdState::AuthQuestion { session: question },
-            R::AuthInformative(informative) => {
-                GreetdState::AuthInformative(GreetdInformativeState::NotSent(informative))
-            }
+            R::AuthInformative(informative) => GreetdState::AuthInformative(informative),
         },
         None,
     )
-}
-
-impl<Client> From<AuthInformative<'_>> for GreetdInformativeState<Client>
-where
-    Client: Greetd,
-{
-    fn from(msg: AuthInformative) -> Self {
-        match msg {
-            AuthInformative::Info(str) => Self::WaitingForInfo(str.to_string()),
-            AuthInformative::Error(str) => Self::WaitingForError(str.to_string()),
-        }
-    }
 }
